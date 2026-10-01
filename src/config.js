@@ -123,4 +123,13 @@ export const FEEL = {
   cleanAngle: 25, // degrees between board axis and travel for a clean landing
   sketchyAngle: 45, // beyond this the landing is a wipeout
   landingShowMs: 1600, // how long the HUD shows the landing grade
+  readyZoom: 2.5, // degrees of extra FOV micro-zoom while the charge is in the sweet spot...
+  readyRate: 18, // ...snapping in and out at this rate (1/s)
 };
+  hitStop: 0.08, // s of real time the world freezes on a perfect pop...
+  hitStopScale: 0.02, // ...at this sim speed
+  readyColor: 0x00f6ff, // rider outline in the sweet spot ("ready" tell)...
+  readyOutline: 1.6, // ...this many times thicker
+  crouchDepth: 0.85, // share of the deep-crouch pose blended in at full charge
+  squash: 0.08, // cartoon squash (height lost) at full charge
+  idleSpeed: 1.5, // m/s; slower than this on the water the rider just stands

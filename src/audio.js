@@ -1,16 +1,22 @@
-// Procedural sound: wind, water hiss, kite whoosh/flap, landing thump. No assets.
-// Browsers block audio until a user gesture, so the graph is built on the first key/click.
-// M toggles mute.
+import { JUMP } from './config.js';
+import { inSweetSpot } from './feel.js';
 
-const VOLUME = 0.8;
+// Procedural cartoon sound: wind, water hiss, kite whoosh/flap, a charge tone with a sweet-spot
+// chime, release whoomps and a landing thump. No assets.
+// Browsers block audio until a user gesture, so the graph is built on the first key/click/tap
+// and plays from then on; M toggles mute.
+
+const VOLUME = 0.9;
 const SMOOTH = 0.08; // seconds; time constant for parameter changes, hides per-frame steps
 
 export function createAudio() {
   let ctx = null;
   let nodes = null;
-  let muted = true; // off by default; M turns it on
+  let muted = false;
   let prevAz = null;
   let prevEl = 0;
+  let wasReady = false;
+  let wasWipeout = false;
 
   function start() {
     if (ctx) return void ctx.resume();
@@ -44,10 +50,10 @@ export function createAudio() {
       const k = kite.crashed ? 0 : Math.min(ang / 2, 1);
       const power = kite.crashed ? 0 : kite.power;
 
-      // Wind: rises with gusts and with the apparent wind of riding fast.
+      // Wind: soft, rising with gusts and with the apparent wind of riding fast.
       const w = state.gust * (0.6 + 0.6 * s);
-      set(nodes.windFilter.frequency, 250 + 700 * w);
-      set(nodes.windGain.gain, 0.05 + 0.08 * w);
+      set(nodes.windFilter.frequency, 250 + 600 * w);
+      set(nodes.windGain.gain, 0.02 + 0.035 * w);
 
       // Water hiss: only while the board is on the water.
       set(nodes.waterFilter.frequency, 900 + 2500 * s);
@@ -59,14 +65,28 @@ export function createAudio() {
       set(nodes.flapDepth.gain, 0.04 * (k + 0.3) * (1 - power) * (kite.crashed ? 0 : 1));
       set(nodes.flapLfo.frequency, 7 + 10 * k);
 
+      // Charge: a tone rising with the load; a chime on entering the sweet spot, sour (sawtooth) past it.
+      const ready = inSweetSpot(state.charge);
+      set(nodes.chargeOsc.frequency, 220 + 520 * state.charge);
+      set(nodes.chargeGain.gain, state.charge > 0 ? 0.05 + 0.05 * state.charge : 0);
+      nodes.chargeOsc.type = state.charge > JUMP.sweetMax ? 'sawtooth' : 'triangle';
+      if (ready && !wasReady) chime(ctx, nodes.master);
+      wasReady = ready;
+
+      if (state.jumpResult) RELEASE[state.jumpResult](ctx, nodes.master);
       if (state.landImpact > 0) thump(ctx, nodes.master, Math.min(state.landImpact / 8, 1));
+      const wipeout = state.wipeout > 0;
+      if (wipeout && !wasWipeout) thump(ctx, nodes.master, 1.3);
+      wasWipeout = wipeout;
     },
   };
 }
 
 function build(ctx) {
   const master = ctx.createGain();
-  master.connect(ctx.destination);
+  // Glue and safety: the punchy one-shots stack on the loops without clipping.
+  const comp = ctx.createDynamicsCompressor();
+  master.connect(comp).connect(ctx.destination);
 
   // One looped white-noise buffer feeds every noise voice.
   const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -100,33 +120,81 @@ function build(ctx) {
   flapLfo.connect(flapDepth).connect(flapGain.gain);
   flapLfo.start();
 
-  return { master, windFilter, windGain, waterFilter, waterGain, kiteFilter, kiteGain, flapLfo, flapDepth };
+  const chargeOsc = ctx.createOscillator();
+  const chargeGain = ctx.createGain();
+  chargeGain.gain.value = 0;
+  chargeOsc.connect(chargeGain).connect(master);
+  chargeOsc.start();
+
+  return { master, windFilter, windGain, waterFilter, waterGain, kiteFilter, kiteGain, flapLfo, flapDepth, chargeOsc, chargeGain };
 }
 
-// Landing: a falling sine for the body plus a short noise splash; `amount` 0..1.
-function thump(ctx, out, amount) {
-  const t = ctx.currentTime;
+// One enveloped oscillator: `freq` [from, to] Hz over `len` s, peak `gain`, starting `at` s from now.
+function tone(ctx, out, type, [from, to], gain, len, at = 0) {
+  const t = ctx.currentTime + at;
   const osc = ctx.createOscillator();
-  osc.frequency.setValueAtTime(110, t);
-  osc.frequency.exponentialRampToValueAtTime(40, t + 0.25);
+  osc.type = type;
+  osc.frequency.setValueAtTime(from, t);
+  osc.frequency.exponentialRampToValueAtTime(to, t + len);
   const g = ctx.createGain();
-  g.gain.setValueAtTime(0.6 * amount, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + len);
   osc.connect(g).connect(out);
   osc.start(t);
-  osc.stop(t + 0.4);
+  osc.stop(t + len + 0.05);
+}
 
-  const len = ctx.sampleRate * 0.4;
-  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+// A burst of filtered noise; the filter sweeps `freq` [from, to] Hz over `len` s.
+function noise(ctx, out, type, [from, to], gain, len) {
+  const t = ctx.currentTime;
+  const n = Math.ceil(ctx.sampleRate * len);
+  const buf = ctx.createBuffer(1, n, ctx.sampleRate);
   const d = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3;
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n) ** 2;
   const src = ctx.createBufferSource();
   src.buffer = buf;
   const f = ctx.createBiquadFilter();
-  f.type = 'bandpass';
-  f.frequency.value = 1200;
-  const sg = ctx.createGain();
-  sg.gain.value = 0.5 * amount;
-  src.connect(f).connect(sg).connect(out);
+  f.type = type;
+  f.frequency.setValueAtTime(from, t);
+  f.frequency.exponentialRampToValueAtTime(to, t + len);
+  const g = ctx.createGain();
+  g.gain.value = gain;
+  src.connect(f).connect(g).connect(out);
   src.start(t);
+}
+
+// Sweet spot reached: a bright two-note ding.
+function chime(ctx, out) {
+  tone(ctx, out, 'sine', [1320, 1320], 0.18, 0.35);
+  tone(ctx, out, 'sine', [1980, 1980], 0.12, 0.45, 0.06);
+}
+
+// Release: a 'whoomp' (rising sine body + swept air) scaled per result; Perfect adds a sparkle,
+// Overload is a dull bonk, Slow a sad falling 'womp womp'.
+const RELEASE = {
+  perfect(ctx, out) {
+    tone(ctx, out, 'sine', [90, 320], 0.7, 0.28);
+    noise(ctx, out, 'lowpass', [300, 3000], 0.5, 0.35);
+    tone(ctx, out, 'triangle', [880, 1760], 0.15, 0.3, 0.05);
+  },
+  early(ctx, out) {
+    tone(ctx, out, 'sine', [90, 220], 0.4, 0.2);
+    noise(ctx, out, 'lowpass', [300, 1500], 0.25, 0.22);
+  },
+  overload(ctx, out) {
+    tone(ctx, out, 'square', [140, 60], 0.18, 0.25);
+    noise(ctx, out, 'lowpass', [600, 200], 0.3, 0.25);
+  },
+  slow(ctx, out) {
+    tone(ctx, out, 'triangle', [330, 300], 0.15, 0.22);
+    tone(ctx, out, 'triangle', [280, 200], 0.15, 0.35, 0.22);
+  },
+};
+
+// Landing: a punchy pitch-dropping kick for the body, a click on top and a water splash; `amount` 0..1+.
+function thump(ctx, out, amount) {
+  tone(ctx, out, 'sine', [160, 42], 1.0 * amount, 0.32);
+  tone(ctx, out, 'triangle', [900, 120], 0.25 * amount, 0.04);
+  noise(ctx, out, 'bandpass', [1800, 600], 0.7 * amount, 0.45);
 }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CAMERA, FEEL, JUMP } from '../config.js';
 import { postFx } from './postFx.js';
+import { inSweetSpot } from '../feel.js';
 
 const { clamp, smoothstep } = THREE.MathUtils;
 
@@ -18,6 +19,7 @@ export function createFollowCamera(camera) {
   let snap = true; // jump straight to the desired view on the next update (first frame, reset)
   let fov = CAMERA.fov; // smoothed speed FOV, before the charge zoom and takeoff kick
   let charge = 0; // smoothed state.charge
+  let ready = 0; // smoothed 0..1: charge is in the sweet spot
   let lean = 0; // smoothed side the rider leans to: -1 screen left, +1 screen right
   let air = 0; // smoothed 0..1 airborne height factor
   let wasAirborne = false;
@@ -29,7 +31,7 @@ export function createFollowCamera(camera) {
     // Next update jumps straight to the new framing instead of swooping across the map.
     reset() {
       snap = true;
-      charge = air = popKick = landAmp = 0;
+      charge = ready = air = popKick = landAmp = 0;
       wasAirborne = false;
     },
 
@@ -41,6 +43,7 @@ export function createFollowCamera(camera) {
       const speed = Math.hypot(state.vel.x, state.vel.z);
       const speedK = smoothstep(speed, FEEL.fovSpeedMin, FEEL.fovSpeed);
       charge += (state.charge - charge) * ease(FEEL.chargeCamRate);
+      ready += (+inSweetSpot(state.charge) - ready) * ease(FEEL.readyRate);
       // The rider hangs back against the kite, i.e. away from the travel direction (stable when the kite goes to 12).
       lean += (clamp(-state.vel.x / 2, -1, 1) - lean) * ease(FEEL.chargeCamRate);
       const height = state.airborne ? Math.max(0, state.pos.y - state.takeoffY) : 0;
@@ -61,9 +64,10 @@ export function createFollowCamera(camera) {
       desired.z += state.vel.z * FEEL.lookAhead;
       target.lerp(desired, k);
 
-      // FOV: smoothed speed push, minus a charge zoom-in that tightens up to the sweet spot, plus the takeoff kick.
+      // FOV: smoothed speed push, minus a charge zoom-in that tightens up to the sweet spot and a
+      // micro-zoom while in it, plus the takeoff kick.
       fov += (CAMERA.fov + fx * (FEEL.fovMax - CAMERA.fov) * speedK - fov) * ease(FEEL.fovRate);
-      const zoom = fx * FEEL.chargeZoom * smoothstep(charge, 0, JUMP.sweetMin);
+      const zoom = fx * (FEEL.chargeZoom * smoothstep(charge, 0, JUMP.sweetMin) + FEEL.readyZoom * ready);
       if (state.airborne && !wasAirborne) popKick = FEEL.popFovKick * fx;
       wasAirborne = state.airborne;
       popKick *= Math.exp(-FEEL.popFovDecay * dt);

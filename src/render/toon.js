@@ -46,21 +46,25 @@ export function toonify(root) {
 }
 
 // Inverted hull: back faces pushed out along the view-space normal, scaled by depth so the line
-// keeps a constant on-screen width (~1/400 of the screen height) near and far.
-const OUTLINE_WIDTH = 0.0025;
-const outlineMaterial = new THREE.MeshBasicMaterial({ color: 0x1d1d28, side: THREE.BackSide });
-outlineMaterial.onBeforeCompile = (shader) => {
-  shader.vertexShader = shader.vertexShader.replace(
-    '#include <project_vertex>',
-    /* glsl */ `#include <project_vertex>
-    #ifdef USE_SKINNING
-      vec3 outlineNormal = objectNormal; // already skinned
-    #else
-      vec3 outlineNormal = normal;
-    #endif
-    mvPosition.xyz += normalize(normalMatrix * outlineNormal) * (${OUTLINE_WIDTH} * -mvPosition.z);
-    gl_Position = projectionMatrix * mvPosition;`
-  );
+// keeps a constant on-screen width (~1/400 of the screen height) near and far. The width is a
+// uniform in userData, so a clone (same shader program) can draw a thicker line.
+export const outlineMaterial = new THREE.MeshBasicMaterial({ color: 0x1d1d28, side: THREE.BackSide });
+outlineMaterial.userData.width = { value: 0.0025 };
+outlineMaterial.onBeforeCompile = function (shader) {
+  shader.uniforms.outlineWidth = this.userData.width;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nuniform float outlineWidth;')
+    .replace(
+      '#include <project_vertex>',
+      /* glsl */ `#include <project_vertex>
+      #ifdef USE_SKINNING
+        vec3 outlineNormal = objectNormal; // already skinned
+      #else
+        vec3 outlineNormal = normal;
+      #endif
+      mvPosition.xyz += normalize(normalMatrix * outlineNormal) * (outlineWidth * -mvPosition.z);
+      gl_Position = projectionMatrix * mvPosition;`
+    );
 };
 
 // Adds a hull child to every mesh under `root`; skinned meshes share the source skeleton so

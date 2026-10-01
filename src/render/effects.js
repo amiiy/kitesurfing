@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { waveHeight } from '../waves.js';
+import { inSweetSpot } from '../feel.js';
 
-// Board effects: heel-edge spray, landing splash and a foam wake trail.
+// Board effects: heel-edge spray, landing splash, a foam wake trail, the sweet-spot ring and
+// the release cues (screen flash and spray bursts).
 
 // ---------- spray: pooled point particles ----------
 function createSpray(max = 2000) {
@@ -190,21 +192,87 @@ function createWake(maxPoints = 200, lifetime = 7) {
   };
 }
 
+// ---------- sweet-spot ring: a flat cyan ring that pulses out from the board ----------
+const RING_PERIOD = 0.35; // s between pulses while the charge stays in the sweet spot
+function createRing() {
+  const mesh = new THREE.Mesh(
+    new THREE.RingGeometry(0.85, 1, 48).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0x2ef2ff, transparent: true, depthWrite: false, fog: false })
+  );
+  mesh.visible = false;
+  let age = RING_PERIOD;
+  return {
+    mesh,
+    update(state, dt) {
+      const ready = inSweetSpot(state.charge);
+      if (ready && age >= RING_PERIOD) age = 0; // first pulse on entry, then one per period
+      age += dt;
+      const p = age / RING_PERIOD;
+      mesh.visible = p < 1;
+      if (!mesh.visible) return;
+      mesh.position.set(state.pos.x, state.pos.y + 0.08, state.pos.z);
+      mesh.scale.setScalar(0.6 + 1.6 * p);
+      mesh.material.opacity = 0.8 * (1 - p);
+    },
+  };
+}
+
+// ---------- screen flash: a DOM overlay over the canvas, timed in real time so it fades through the hit-stop ----------
+function createFlash() {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;inset:0;pointer-events:none;opacity:0;z-index:5';
+  document.body.appendChild(el);
+  let start = 0;
+  let peak = 0;
+  let length = 1;
+  return {
+    fire(color, opacity, ms) {
+      el.style.background = color;
+      [start, peak, length] = [performance.now(), opacity, ms];
+    },
+    update() {
+      const p = (performance.now() - start) / length;
+      el.style.opacity = p < 1 ? (peak * (1 - p) ** 2).toFixed(3) : '0';
+    },
+  };
+}
+
+// Release cues, smaller than Perfect's on purpose: [flash colour, opacity, ms] and a spray burst
+// (particles, upward speed, outward speed).
+const RELEASE = {
+  perfect: { flash: ['#fff', 0.75, 260], burst: [160, 5, 4] },
+  early: { burst: [30, 2.5, 1.5] },
+  overload: { flash: ['#ff6a4d', 0.25, 220], burst: [50, 1.5, 3] },
+  slow: { burst: [12, 1, 1] },
+};
+
 // ---------- emitter: drives spray and wake from the simulation state ----------
 export function createBoardEffects(renderer) {
   const spray = createSpray();
   const wake = createWake();
+  const ring = createRing();
+  const flash = createFlash();
   const heel = new THREE.Vector3();
   const origin = new THREE.Vector3();
   const velocity = new THREE.Vector3();
   let sprayBudget = 0; // fractional particles carried between frames
   let wasAirborne = false;
+  let wasWipeout = false;
+
+  // `count` drops thrown up and out in a crown around the board.
+  function burst(pos, vel, count, up, out) {
+    for (let k = 0; k < 12; k++) {
+      const ang = (k / 12) * Math.PI * 2;
+      velocity.set(vel.x * 0.3 + Math.cos(ang) * out, up, vel.z * 0.3 + Math.sin(ang) * out);
+      spray.emit(pos, velocity, 1.5, Math.ceil(count / 12), 1.1, 0.4);
+    }
+  }
 
   const updatePixelScale = () => spray.setPixelScale(innerHeight * renderer.getPixelRatio());
   updatePixelScale();
 
   return {
-    objects: [spray.points, wake.mesh],
+    objects: [spray.points, wake.mesh, ring.mesh],
     updatePixelScale,
     reset() {
       wake.clear();
@@ -222,14 +290,20 @@ export function createBoardEffects(renderer) {
         // crown splash: an outward ring plus a vertical plume
         const n = Math.round(60 + state.landImpact * 25);
         const up = 1.5 + state.landImpact * 0.35;
-        for (let k = 0; k < 12; k++) {
-          const ang = (k / 12) * Math.PI * 2;
-          velocity.set(vel.x * 0.3 + Math.cos(ang) * 3, up * 0.7, vel.z * 0.3 + Math.sin(ang) * 3);
-          spray.emit(pos, velocity, 1.5, Math.round(n * 0.05), 1.1, 0.4);
-        }
+        burst(pos, vel, n * 0.6, up * 0.7, 3);
         velocity.set(vel.x * 0.3, up, vel.z * 0.3);
         spray.emit(pos, velocity, 2, Math.round(n * 0.4), 1.1, 0.45);
       }
+
+      const cue = RELEASE[state.jumpResult];
+      if (cue) {
+        if (cue.flash) flash.fire(...cue.flash);
+        burst(pos, vel, ...cue.burst);
+      }
+      // Wipeout: a big messy splash as the rider goes down.
+      const wipeout = state.wipeout > 0;
+      if (wipeout && !wasWipeout) burst(pos, vel, 200, 4, 5);
+      wasWipeout = wipeout;
 
       if (!state.airborne && speed > 1) {
         wake.add(pos.x - forward.x * 0.6, pos.z - forward.z * 0.6, Math.min(1, speed / 8));
@@ -250,6 +324,8 @@ export function createBoardEffects(renderer) {
 
       spray.update(dt);
       wake.update(dt, t);
+      ring.update(state, dt);
+      flash.update();
     },
   };
 }

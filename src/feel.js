@@ -1,15 +1,23 @@
 import { MathUtils } from 'three';
-import { FEEL } from './config.js';
+import { FEEL, JUMP } from './config.js';
 
-// Game feel that sits between sim and render: apex slow-mo and landing grades.
+// Game feel that sits between sim and render: perfect-pop hit-stop, apex slow-mo and landing grades.
 
 // { grade: 'clean' | 'sketchy' | 'crash', angle (deg), height (m), time (performance.now ms) }
 export let lastLanding = null;
 let wasAirborne = false;
+let hitStopUntil = 0; // performance.now ms
 
-// Called once per frame with the sim state, before stepping. Reads vel.y rather than
-// integrating anything, so the slow-mo eases in and out with the jump arc by itself.
-export function timeScale(state) {
+// The "ready" window: releasing now pops a perfect jump.
+export const inSweetSpot = (charge) => charge >= JUMP.sweetMin && charge <= JUMP.sweetMax;
+
+// Called once per frame with the sim state, before stepping, and last frame's one-shot jump result.
+// Reads vel.y rather than integrating anything, so the slow-mo eases in and out with the jump arc by itself.
+export function timeScale(state, jumpResult) {
+  const now = performance.now();
+  if (jumpResult === 'perfect') hitStopUntil = now + FEEL.hitStop * 1000;
+  if (now < hitStopUntil) return FEEL.hitStopScale;
+
   if (wasAirborne && !state.airborne && state.airHeight >= FEEL.gradeMinHeight) gradeLanding(state);
   wasAirborne = state.airborne;
   if (!state.airborne) return 1;

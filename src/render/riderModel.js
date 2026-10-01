@@ -1,23 +1,19 @@
 import * as THREE from 'three';
-import { POSE } from '../config.js';
+import { FEEL, POSE } from '../config.js';
+import { inSweetSpot } from '../feel.js';
 import { getAsset } from './assets.js';
+import { outlineMaterial } from './toon.js';
 
 const COLORS = { skin: 0xe0ac85, suit: 0x1d1d28, accent: 0x22c3ff, cap: 0xff3d6e, board: 0xf2f2f2, gear: 0x111111 };
 const BAR_HALF_WIDTH = 0.27;
 
-function box(w, h, d, color) {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color }));
-  mesh.castShadow = true;
-  return mesh;
-}
+const box = (w, h, d, color) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color }));
 
 // Capsule pivoting at its top end, hanging down -Y.
 function limb(length, radius, color) {
   const geo = new THREE.CapsuleGeometry(radius, length, 4, 8);
   geo.translate(0, -length / 2, 0);
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color }));
-  mesh.castShadow = true;
-  return mesh;
+  return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color }));
 }
 
 const BOARD_LENGTH = 1.4;
@@ -41,7 +37,6 @@ function gltfBoard(model) {
   model.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model);
   model.position.set(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
-  model.traverse((o) => (o.castShadow = o.isMesh));
   const board = new THREE.Group();
   board.add(model);
   return board;
@@ -99,7 +94,6 @@ function buildRider() {
   harness.position.y = 0.18;
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 16, 12), new THREE.MeshStandardMaterial({ color: COLORS.skin }));
   head.position.y = 0.85;
-  head.castShadow = true;
   const cap = new THREE.Mesh(
     new THREE.SphereGeometry(0.135, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
     new THREE.MeshStandardMaterial({ color: COLORS.cap })
@@ -123,16 +117,16 @@ function buildRider() {
 // rider.glb: Meshy auto-rig (meters, feet at origin, facing +Z) with clips ride, edge, pop, air,
 // land, fall, water_idle. It replaces the procedural body; unrigged or missing => procedural rider.
 const FADE = 0.2; // s, crossfade between clips
+const GET_UP = 0.5; // s, crossfade out of a wipeout
 // One-shots play [from, to] seconds of their library animation, then hand back to the state clip.
-const SHOTS = { pop: [0.35, 0.8], land: [1.5, 2.2], fall: [0, Infinity] };
+// pop stops at its extension: later its root motion lifts the feet off the board.
+const SHOTS = { pop: [0.3, 0.55], land: [1.5, 2.2], fall: [0, Infinity] };
+const CROUCH = ['pop', 0.28]; // pop's wind-up: the deepest crouch in the library, blended in by charge
 
 function attachGltfRider(tilt, hide) {
   const gltf = getAsset('rider');
   let rigged = false;
-  gltf?.scene.traverse((o) => {
-    rigged ||= o.isSkinnedMesh;
-    o.castShadow = o.isMesh;
-  });
+  gltf?.scene.traverse((o) => (rigged ||= o.isSkinnedMesh));
   if (!rigged) return null;
   const model = gltf.scene;
   model.position.y = BOARD_THICKNESS / 2; // stand on the deck
@@ -145,6 +139,11 @@ function attachGltfRider(tilt, hide) {
     actions[name].setLoop(THREE.LoopOnce);
     actions[name].clampWhenFinished = true;
   }
+  // Its own action on a clone of the clip, so it holds still apart from the pop one-shot.
+  const crouch = mixer.clipAction(gltf.animations.find((c) => c.name === CROUCH[0]).clone());
+  crouch.play();
+  crouch.paused = true;
+  crouch.time = CROUCH[1];
   const spine = model.getObjectByName('Spine02');
   const hands = [model.getObjectByName('LeftHand'), model.getObjectByName('RightHand')];
   const offset = new THREE.Quaternion();
@@ -157,26 +156,37 @@ function attachGltfRider(tilt, hide) {
   let side = 1; // kite on the board's left (1) or right (-1)
   let twist = 0;
   let lean = 0;
+  let crouchShare = 0; // 0..1 of the pose that is the crouch
 
   function play(name) {
     if (name === clip) return;
     const next = actions[name].reset();
     next.time = SHOTS[name]?.[0] ?? 0;
     next.play();
-    if (clip) actions[clip].crossFadeTo(next, FADE, false);
+    if (clip) actions[clip].crossFadeTo(next, clip === 'fall' ? GET_UP : FADE, false);
     clip = name;
   }
   const busy = (name) => clip === name && actions[name].isRunning() && actions[name].time < SHOTS[name][1];
   function chooseClip(s) {
     if (s.kite.crashed) return (clip === 'fall' && !busy('fall')) || clip === 'water_idle' ? 'water_idle' : 'fall';
+    if (s.wipeout > 0) return 'fall'; // the sim's crash timer: landed mid-spin or overloaded, or hit something
     if (s.airborne) return clip !== 'air' && s.vel.y > 0 && (clip !== 'pop' || busy('pop')) ? 'pop' : 'air';
     if (s.landImpact > 0 || busy('land')) return 'land';
+    if (s.charge === 0 && Math.hypot(s.vel.x, s.vel.z) < FEEL.idleSpeed) return 'water_idle'; // stands when stopped
     return s.edge > (clip === 'edge' ? 0.4 : 0.5) || s.charge > 0 ? 'edge' : 'ride'; // hysteresis: no flicker
   }
 
   return {
     update(state, kiteYaw, k, dt) {
       play(chooseClip(state));
+
+      // Loading the jump sinks into the crouch and squashes a little; a grab tucks all the way.
+      const grab = state.airborne && state.trick === 'grab';
+      const share = clip === 'fall' ? 0 : grab ? 0.9 : state.airborne ? 0 : FEEL.crouchDepth * state.charge;
+      crouchShare = lerp(crouchShare, share, 1 - Math.exp(-15 * dt));
+      crouch.setEffectiveWeight(crouchShare / (1 - crouchShare)); // the state clips weigh 1: share = w / (1 + w)
+      const squash = FEEL.squash * crouchShare;
+      model.scale.set(1 + squash / 2, 1 - squash, 1 + squash / 2);
       mixer.update(dt);
 
       // Side-on with the chest to the kite; switch feet once the kite is clearly on the other side.
@@ -186,7 +196,7 @@ function attachGltfRider(tilt, hide) {
       // The spine twists the rest of the way to the kite and hangs back against the pull. The offset
       // is a model-space rotation, conjugated into the spine's parent frame: L' = P⁻¹ R P L.
       twist = lerp(twist, THREE.MathUtils.clamp(kiteYaw - (side * Math.PI) / 2, -0.7, 0.7), k);
-      lean = lerp(lean, 0.3 * state.kite.power, k);
+      lean = lerp(lean, grab ? -0.6 : 0.3 * state.kite.power, k); // a grab folds forward to the board
       offset.setFromEuler(euler.set(-lean, twist, 0));
       parent.identity();
       for (let o = spine.parent; o !== model; o = o.parent) parent.premultiply(o.quaternion);
@@ -210,6 +220,12 @@ export function createRiderModel() {
   const barOffset = new THREE.Vector3(0, 0.35, -0.45); // in front of the chest, upper-body space
   const barEndLocal = [new THREE.Vector3(-BAR_HALF_WIDTH, 0, 0), new THREE.Vector3(BAR_HALF_WIDTH, 0, 0)];
   const lerp = THREE.MathUtils.lerp;
+  // "Ready" tell: in the sweet spot the outline turns thick and cyan and the body flashes on entry.
+  const riderOutline = Object.assign(outlineMaterial.clone(), { onBeforeCompile: outlineMaterial.onBeforeCompile }); // own colour and width, same shader
+  const readyColor = new THREE.Color(FEEL.readyColor);
+  let bodyMaterials = null; // found on the first update: main toonifies and outlines after creation
+  let wasReady = false;
+  let flash = 0;
 
   return {
     objects: [root, bar],
@@ -219,9 +235,26 @@ export function createRiderModel() {
       const k = 1 - Math.exp(-POSE.smoothRate * dt); // frame-rate independent smoothing
       const speed = Math.hypot(state.vel.x, state.vel.z);
 
+      if (!bodyMaterials) {
+        bodyMaterials = new Set();
+        for (const o of [root, bar]) {
+          o.traverse((m) => {
+            if (m.material === outlineMaterial) m.material = riderOutline;
+            else if (m.isMesh) for (const mat of [m.material].flat()) bodyMaterials.add(mat);
+          });
+        }
+      }
+      const ready = inSweetSpot(state.charge);
+      if (ready && !wasReady) flash = 1;
+      wasReady = ready;
+      flash = Math.max(0, flash - 5 * dt);
+      riderOutline.color.copy(ready ? readyColor : outlineMaterial.color);
+      riderOutline.userData.width.value = outlineMaterial.userData.width.value * (ready ? FEEL.readyOutline : 1);
+      for (const mat of bodyMaterials) mat.emissive?.copy(readyColor).multiplyScalar(0.7 * flash);
+
       root.position.copy(state.pos);
       root.position.y += POSE.rideHeight;
-      root.rotation.y = state.yaw;
+      root.rotation.y = state.yaw + state.trickSpin;
 
       // Upper body turns toward the kite and hangs back in the harness against the pull.
       const kiteYaw = THREE.MathUtils.clamp(relativeYaw(state.kiteDir, state.yaw), -1.7, 1.7);
@@ -235,8 +268,9 @@ export function createRiderModel() {
       legR.rotation.x = 0.35 + 0.4 * state.charge;
 
       // Heel edge digs in on the side away from the kite; on the water the board also follows
-      // the wave slope; in the air the nose pitches with the jump arc.
-      const roll = state.airborne ? 0 : -Math.sin(kiteYaw) * (0.08 + 0.3 * state.edge) * Math.min(1, speed / 4);
+      // the wave slope; in the air the nose pitches with the jump arc and a grab tweaks the board.
+      const tweak = state.trick === 'grab' ? 0.5 : 0;
+      const roll = state.airborne ? tweak : -Math.sin(kiteYaw) * (0.08 + 0.3 * state.edge) * Math.min(1, speed / 4);
       const waveRoll = state.airborne ? 0 : Math.atan(state.slope.x * state.side.x + state.slope.z * state.side.z);
       const wavePitch = state.airborne ? 0 : Math.atan(state.slope.x * state.forward.x + state.slope.z * state.forward.z);
       tilt.rotation.z = lerp(tilt.rotation.z, roll + waveRoll + Math.sin(t * 2) * 0.03, k);

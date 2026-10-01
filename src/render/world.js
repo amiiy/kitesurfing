@@ -18,7 +18,7 @@ export function createWorld(container) {
   // Neutral keeps the cartoon palette close to its authored hex values (ACES desaturates and darkens).
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.toneMappingExposure = 1;
-  renderer.shadowMap.enabled = true;
+  // No shadow pass: the toon water doesn't receive shadows, so a shadow map would be drawn for nothing.
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -30,13 +30,12 @@ export function createWorld(container) {
   const shore = createShoreline();
   scene.add(shore.group);
 
-  // Cool sky fill with a turquoise bounce from the sea, so the shadow side of a backlit rider still has colour.
+  // Cool sky fill with a turquoise bounce from the sea.
   scene.add(new THREE.HemisphereLight(0xa8d8ff, 0x22a5b0, 1.9));
-  // Warm key. Tight shadow frustum that follows the rider.
+  // Warm key from behind and above the camera (which sits upwind, +Z), so the rider is always front-lit.
+  // The sky's sun disc and the water's glints stay on `sun`; only the light moves.
+  const key = new THREE.Vector3(0.35, 0.8, 1).normalize();
   const sunLight = new THREE.DirectionalLight(0xffe4bd, 2.6);
-  sunLight.castShadow = true;
-  sunLight.shadow.mapSize.set(1024, 1024);
-  Object.assign(sunLight.shadow.camera, { left: -15, right: 15, top: 15, bottom: -15 });
   scene.add(sunLight, sunLight.target);
 
   // No bloom: the toon look wants crisp edges, and the sun disc and water sparkles are hard-edged anyway.
@@ -65,7 +64,7 @@ export function createWorld(container) {
     onResize: (fn) => resizeListeners.push(fn),
     followSun(target) {
       sunLight.target.position.copy(target);
-      sunLight.position.copy(target).addScaledVector(sun, 50);
+      sunLight.position.copy(target).addScaledVector(key, 50);
       shore.follow(target);
     },
     render: () => composer.render(),
