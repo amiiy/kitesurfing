@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kite Runner</title>
+    <style>
+      /* The whole screen is the button: no scrolling, zooming, selection or long-press menus. */
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+      #hud, #gauges { position: fixed; color: #fff; text-shadow: 0 1px 3px #000; pointer-events: none; }
+      #hud { top: 10px; left: 10px; padding: 6px 10px; border-radius: 8px; background: #0005; font-size: 13px; line-height: 1.4; }
+      #speed { font-size: 26px; font-weight: 700; }
+      #gauges { left: 50%; bottom: 12px; transform: translateX(-50%); width: min(88vw, 440px); display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; font-size: 13px; font-weight: 700; letter-spacing: .04em; }
+      .bar { position: relative; height: 18px; border-radius: 9px; overflow: hidden; background: #0009; box-shadow: inset 0 0 0 1.5px #fffa; }
+      .bar > div { position: absolute; inset: 0 auto 0 0; width: 0; }
+      #power > div { background: #4cf; }
+      #sweet { position: absolute; top: 0; bottom: 0; background: #7dffa855; box-shadow: inset 0 0 0 2px #7dffa8; }
+      #help { grid-column: 1 / -1; text-align: center; font-size: 12px; font-weight: 400; letter-spacing: 0; opacity: .85; }
+      #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #fff; background: #0a1a2a; z-index: 10; }
+      #loading > div { width: 200px; height: 4px; background: #fff3; }
+      #loading > div > div { width: 0; height: 100%; background: #4cf; transition: width .2s; }
+    </style>
+  </head>
+  <body>
+    <div id="loading">Loading…<div><div></div></div></div>
+    <div id="hud">
+      <div><span id="speed">0</span> km/h</div>
+      <div>Wind <span id="wind">27</span> kn · Air <span id="air">–</span> · Best <span id="best">0.0 m</span></div>
+      <div id="crash" style="display:none;color:#ffd21f;font-weight:bold">Kite down! Relaunching…</div>
+    </div>
+    <div id="gauges">
+      <span>POWER <span id="power-pct">0</span>%</span>
+      <div id="power" class="bar"><div></div></div>
+      <span>JUMP</span>
+      <div id="charge" class="bar"><div id="sweet"></div><div></div></div>
+      <div id="help">Hold click/tap to edge &amp; load · release to jump · R reset · M sound</div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

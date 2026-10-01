@@ -1,0 +1,6 @@
+node_modules
+dist
+.vercel
+public/models/*.src.glb
+.env.local
+assets-src
