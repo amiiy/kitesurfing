@@ -7,7 +7,7 @@
     <style>
       /* The whole screen is the button: no scrolling, zooming, selection or long-press menus. */
       html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-      #hud, #gauges { position: fixed; color: #fff; text-shadow: 0 1px 3px #000; pointer-events: none; }
+      #hud, #gauges, #score-box { position: fixed; color: #fff; text-shadow: 0 1px 3px #000; pointer-events: none; }
       #hud { top: 10px; left: 10px; padding: 6px 10px; border-radius: 8px; background: #0005; font-size: 13px; line-height: 1.4; }
       #speed { font-size: 26px; font-weight: 700; }
       #gauges { left: 50%; bottom: 12px; transform: translateX(-50%); width: min(88vw, 440px); display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; font-size: 13px; font-weight: 700; letter-spacing: .04em; }
@@ -16,13 +16,55 @@
       #power > div { background: #4cf; }
       #sweet { position: absolute; top: 0; bottom: 0; background: #7dffa855; box-shadow: inset 0 0 0 2px #7dffa8; }
       #help { grid-column: 1 / -1; text-align: center; font-size: 12px; font-weight: 400; letter-spacing: 0; opacity: .85; }
-      #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #fff; background: #0a1a2a; z-index: 10; }
+      #score-box { top: 10px; right: 12px; text-align: right; font-weight: 800; }
+      #score, #mult { display: inline-block; transform-origin: right center; }
+      #score { font-size: 30px; }
+      #mult { margin-left: 6px; font-size: 22px; color: #ffd21f; }
+      #timer { font-size: 16px; font-variant-numeric: tabular-nums; }
+      /* Title (also the load screen) and results. The whole screen is still the button; only <button>s aren't. */
+      .screen { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 20px; color: #fff; text-align: center; text-shadow: 0 2px 6px #000a; background: #0a1a2aaa; }
+      .screen[hidden] { display: none; }
+      .screen h1 { margin: 0; font-size: clamp(44px, 11vw, 88px); letter-spacing: .02em; }
+      .screen h2 { margin: 0; font-size: 28px; }
+      #title:not(.ready) { background: #0a1a2a; }
+      #title:not(.ready) .tap { visibility: hidden; }
+      .tap { font-size: 22px; font-weight: 700; animation: blink 1.2s ease-in-out infinite; }
+      @keyframes blink { 50% { opacity: .4; } }
+      .how { max-width: 520px; font-size: 14px; line-height: 1.6; opacity: .9; }
+      #final { font-size: 72px; font-weight: 800; line-height: 1; }
+      #record { font-size: 16px; color: #ffd21f; font-weight: 700; }
+      #stats { display: grid; grid-template-columns: auto auto; gap: 4px 18px; font-size: 16px; }
+      #stats dt { text-align: right; opacity: .8; }
+      #stats dd { margin: 0; text-align: left; font-weight: 700; }
+      #share { padding: 10px 28px; border: 0; border-radius: 22px; font: 700 18px system-ui, sans-serif; color: #1d1d28; background: #ffd21f; cursor: pointer; }
+      #loading { display: flex; flex-direction: column; align-items: center; gap: 10px; }
       #loading > div { width: 200px; height: 4px; background: #fff3; }
       #loading > div > div { width: 0; height: 100%; background: #4cf; transition: width .2s; }
     </style>
   </head>
   <body>
-    <div id="loading">Loading…<div><div></div></div></div>
+    <div id="title" class="screen">
+      <h1>Kite Runner</h1>
+      <div id="loading">Loading…<div><div></div></div></div>
+      <div class="tap">Tap to start</div>
+      <div class="how">Hold to load the jump, release in the green for a <b>Perfect</b>. Chain Perfects for ×2, ×3…<br />In the air: tap to grab, double-tap to 360, and land it straight.<br />Pop off swells, fly through rings, clear the buoys and boats. 75 seconds!</div>
+    </div>
+    <div id="results" class="screen" hidden>
+      <h2>Time!</h2>
+      <div id="final">0</div>
+      <div id="record"></div>
+      <dl id="stats">
+        <dt>Best jump</dt><dd id="best-jump">–</dd>
+        <dt>Perfects</dt><dd id="perfects">0</dd>
+        <dt>Max combo</dt><dd id="max-combo">×1</dd>
+      </dl>
+      <button id="share">Share</button>
+      <div class="tap">Tap to retry</div>
+    </div>
+    <div id="score-box">
+      <div><span id="score">0</span><span id="mult">×1</span></div>
+      <div id="timer">75</div>
+    </div>
     <div id="hud">
       <div><span id="speed">0</span> km/h</div>
       <div>Wind <span id="wind">27</span> kn · Air <span id="air">–</span> · Best <span id="best">0.0 m</span></div>
@@ -33,7 +75,7 @@
       <div id="power" class="bar"><div></div></div>
       <span>JUMP</span>
       <div id="charge" class="bar"><div id="sweet"></div><div></div></div>
-      <div id="help">Hold click/tap to edge &amp; load · release to jump · R reset · M sound</div>
+      <div id="help">Hold to edge &amp; load · release to jump · in the air: tap grab, double-tap 360 · R restart · M mute</div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

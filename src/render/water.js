@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { WAVES, waveHeight } from '../waves.js';
+import { GAME } from '../config.js';
+import { WAVES, ramps, waveHeight } from '../waves.js';
 
 // Ocean surface. Waves are displaced in the vertex shader from the shared WAVES set; the fragment
 // shader is cartoon: analytic normals and ripples drive flat colour bands, with hard-edged crest
@@ -9,11 +10,30 @@ import { WAVES, waveHeight } from '../waves.js';
 const f = (n) => n.toFixed(6);
 const phase = (w) => `${f(w.k)} * (dot(vec2(${f(w.dx)}, ${f(w.dz)}), xz) - ${f(w.c)} * uTime)`;
 
+// Kicker swells, same shape as waves.js rampAt: (height, dh/dx, dh/dz) from the nearest RAMPS centres.
+const RAMPS = 4;
+const { height: RH, halfLength: RL, halfWidth: RW } = GAME.ramp;
+const rampGlsl = /* glsl */ `
+uniform vec2 uRamps[${RAMPS}];
+vec3 ramps(vec2 xz) {
+  vec3 r = vec3(0.0);
+  for (int i = 0; i < ${RAMPS}; i++) {
+    vec2 u = (xz - uRamps[i]) / vec2(${f(RL)}, ${f(RW)});
+    if (abs(u.x) >= 1.0 || abs(u.y) >= 1.0) continue;
+    vec2 c = cos(1.5707963 * u);
+    c *= c;
+    vec2 s = sin(3.1415927 * u);
+    r += ${f(RH)} * vec3(c.x * c.y, -${f(Math.PI / (2 * RL))} * s.x * c.y, -${f(Math.PI / (2 * RW))} * s.y * c.x);
+  }
+  return r;
+}`;
+
 const vertexShader = /* glsl */ `
 uniform float uTime;
 varying vec3 vWorld;
 varying vec2 vBase;
 varying float vCrest;
+${rampGlsl}
 #include <fog_pars_vertex>
 void main() {
   vec4 wp = modelMatrix * vec4(position, 1.0);
@@ -25,6 +45,10 @@ void main() {
     p.x += ${f(w.dx * w.a)} * cos(ph); p.z += ${f(w.dz * w.a)} * cos(ph);
     p.y += ${f(w.a)} * sin(ph); crest += ${f(w.s)} * sin(ph); }`
   ).join('\n  ')}
+  // Ramps lift the surface and whiten towards their tops so they read as breaking swells.
+  vec3 ramp = ramps(xz);
+  p.y += ramp.x;
+  crest += 0.3 * ramp.x / ${f(RH)};
   vWorld = p;
   vBase = xz;
   vCrest = crest;
@@ -48,6 +72,7 @@ varying vec3 vWorld;
 varying vec2 vBase;
 varying float vCrest;
 #include <fog_pars_fragment>
+${rampGlsl}
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
@@ -69,6 +94,8 @@ void main() {
     (w) => `{ float ph = ${phase(w)};
     n.x -= ${f(w.dx * w.s)} * cos(ph); n.z -= ${f(w.dz * w.s)} * cos(ph); n.y -= ${f(w.s)} * sin(ph); }`
   ).join('\n  ')}
+  vec3 ramp = ramps(xz);
+  n.xz -= ramp.yz;
   vec3 Ng = normalize(n); // swell only, before ripples: a smooth field to size the sparkles by
 
   // Small wind ripples, faded out with distance to avoid shimmering
@@ -151,6 +178,7 @@ export function createWater({ size = 400, segments = 220, sunDir }) {
         uFoam: { value: new THREE.Color(0xf4fcff) },
         uRider: { value: new THREE.Vector4() },
         uVel: { value: new THREE.Vector3() },
+        uRamps: { value: Array.from({ length: RAMPS }, () => new THREE.Vector2()) },
       },
     ]),
   });
@@ -165,6 +193,10 @@ export function createWater({ size = 400, segments = 220, sunDir }) {
       const { x, y, z } = state.pos;
       mesh.position.set(Math.round(x / cell) * cell, 0, Math.round(z / cell) * cell);
       material.uniforms.uTime.value = t;
+      for (let i = 0; i < RAMPS; i++) {
+        const r = ramps[ramps.length - 1 - i]; // the latest are the nearest: they're fixed in course order
+        material.uniforms.uRamps.value[i].set(r ? r.x : 1e6, r ? r.z : 1e6);
+      }
       material.uniforms.uRider.value.set(x, y, z, Math.max(0, y - waveHeight(x, z, t)));
       const speed = Math.hypot(state.vel.x, state.vel.z);
       if (speed > 0.01) material.uniforms.uVel.value.set(state.vel.x / speed, state.vel.z / speed, speed);

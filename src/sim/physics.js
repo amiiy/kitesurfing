@@ -1,6 +1,6 @@
 import { MathUtils, Vector3 } from 'three';
 import { BOARD, JUMP, KITE, WIND } from '../config.js';
-import { waveHeight, waveSlope } from '../waves.js';
+import { rampAt, waveHeight, waveSlope } from '../waves.js';
 
 // Pure simulation: no scene objects. Renderers and effects read `state` after each step.
 
@@ -22,6 +22,10 @@ export function createState() {
     bestJump: 0,
     landImpact: 0, // vertical speed on the frame of touchdown, 0 otherwise
     gust: 1, // current wind multiplier (1 = base strength)
+    // Set by the game rules (src/game/run.js); renderers show them.
+    trick: null, // 'grab' | 'spin' while airborne
+    trickSpin: 0, // rad of extra rider/board yaw from a 360 in progress (0..2π per spin)
+    wipeout: 0, // s left of a crash: input ignored, rider down
 
     kite: parkedKite(),
 
@@ -204,7 +208,9 @@ function updateJumpCharge(s, jumpHeld, speed, waterY, dt) {
   if (s.chargeSpeed > JUMP.minSpeed) {
     const [result, quality] = releaseQuality(s.charge);
     s.jumpResult = result;
-    s.vel.y = JUMP.basePop + quality * (JUMP.speedPop * speed + JUMP.kitePop);
+    // Popping on a kicker's face adds the rate the face lifts the board (static ramp: dh/dt = v·∇h).
+    const ramp = rampAt(s.pos.x, s.pos.z);
+    s.vel.y = JUMP.basePop + quality * (JUMP.speedPop * speed + JUMP.kitePop) + Math.max(0, s.vel.x * ramp.x + s.vel.z * ramp.z);
     s.airborne = true;
     s.takeoffY = waterY;
     s.airHeight = 0;

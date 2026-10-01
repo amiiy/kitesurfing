@@ -72,6 +72,30 @@ export const JUMP = {
   gravity: 9.8,
 };
 
+// Runs, scoring, tricks and the course (src/game/run.js).
+export const GAME = {
+  runTime: 75, // s of sim time per run; a jump still in the air at the buzzer lands and scores
+  // Jump score = height (m) · pointsPerMetre · quality[release] · combo multiplier (chained Perfects).
+  // Landing an overloaded pop is a wipeout and scores nothing.
+  pointsPerMetre: 10,
+  quality: { perfect: 2, early: 1 },
+  grabPoints: 50, // tricks and rings are multiplied by the combo too
+  spinPoints: 150, // per 360
+  ringPoints: 200,
+  doubleTap: 0.3, // s; a second tap in the air within this is a 360, otherwise the tap is a grab
+  spinTime: 0.8, // s per 360
+  spinSlack: 0.35, // rad short of a full turn that still lands
+  wipeoutTime: 1.5, // s down after a crash or hit: no input
+  wipeoutSpeed: 0.3, // share of board speed kept by a crash or hit
+  // Course objects are fixed in x; z is fixed lockDistance m ahead (off screen) on the rider's predicted line.
+  lockDistance: 40,
+  ramp: { height: 1.5, halfLength: 12, halfWidth: 14 }, // m; kicker swell, a raised-cosine mound
+  ringRadius: 3.5, // m; drawn size and vertical hit radius
+  ringDepth: 5, // m of z hit tolerance: depth is hard to judge from the chase camera
+  buoys: { halfX: 0.8, halfZ: 3.5, height: 1.6 }, // hit boxes (m); clear by being higher above the water
+  boat: { halfX: 3.5, halfZ: 2.5, height: 7 },
+};
+
 export const CAMERA = {
   fov: 60,
   offset: [0, 3.2, 17], // relative to the rider, upwind and above
@@ -125,7 +149,6 @@ export const FEEL = {
   landingShowMs: 1600, // how long the HUD shows the landing grade
   readyZoom: 2.5, // degrees of extra FOV micro-zoom while the charge is in the sweet spot...
   readyRate: 18, // ...snapping in and out at this rate (1/s)
-};
   hitStop: 0.08, // s of real time the world freezes on a perfect pop...
   hitStopScale: 0.02, // ...at this sim speed
   readyColor: 0x00f6ff, // rider outline in the sweet spot ("ready" tell)...
@@ -133,3 +156,4 @@ export const FEEL = {
   crouchDepth: 0.85, // share of the deep-crouch pose blended in at full charge
   squash: 0.08, // cartoon squash (height lost) at full charge
   idleSpeed: 1.5, // m/s; slower than this on the water the rider just stands
+};

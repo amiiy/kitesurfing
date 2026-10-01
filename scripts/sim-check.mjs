@@ -1,10 +1,14 @@
 // Headless rides through the real step() and autopilot at 60 Hz, driven exactly like main.js: the
 // only input is the button. Prints tables; exits 1 on a kite crash, a cruise under 35 km/h, a jump
-// table that isn't ordered early < perfect > overload, or any difference between two identical runs.
+// table that isn't ordered early < perfect > overload, any difference between two identical runs,
+// a scripted game run that scores differently twice or misses its combo/crash rules, a ramp pop no
+// higher than a flat one, or wrong ring hit detection.
 // Run: npm run sim:check
 import { createState, step } from '../src/sim/physics.js';
 import { autopilot } from '../src/sim/autopilot.js';
 import { lastLanding, timeScale } from '../src/feel.js';
+import { createRun, stepRun } from '../src/game/run.js';
+import { GAME } from '../src/config.js';
 
 const DT = 1 / 60;
 const KMH = 3.6;
@@ -147,6 +151,71 @@ const b = longSession();
 console.log(`Determinism: ${a.jumps} mixed jumps over ${a.seconds.toFixed(0)} s, run twice → ${a.log === b.log ? 'identical' : 'DIFFERENT'}; kite crashes ${a.crashes}`);
 if (a.log !== b.log) failures.push('two identical runs differ');
 if (a.crashes) failures.push(`long session: ${a.crashes} kite crashes`);
+
+// --- Game runs (src/game/run.js). The button is a list of press intervals [from, to] in s from the start.
+function ride(presses, course, until = (run) => run.phase !== 'playing', each = () => {}) {
+  const s = createState();
+  const run = createRun('playing', course);
+  let t = 0;
+  while (!until(run, s, t)) {
+    t += DT;
+    stepRun(run, s, presses.some(([a, b]) => t >= a && t < b), DT, t);
+    each(s, run, t);
+  }
+  return { s, run };
+}
+
+// A full 75 s run over the real course: a jump every 8 s with a scripted hold and air taps.
+const PLAN = [
+  [0.8], [0.8, 'grab'], [0.85, 'spin'], [0.5, 'spin'], [0.8], [0.8, 'late spin'], [0.95], [0.8, 'grab'], [0.8], [0.8],
+];
+const TAPS = { grab: [1], spin: [0.6, 0.8], 'late spin': [4.6, 4.75] }; // s after release; a late 360 can't finish
+const presses = PLAN.flatMap(([hold, trick], k) => {
+  const at = 1 + 8 * k;
+  return [[at, at + hold], ...(TAPS[trick] ?? []).map((d) => [at + hold + d, at + hold + d + 0.05])];
+});
+const scripted = () => ride(presses).run;
+const runA = scripted();
+const runB = scripted();
+const lands = runA.events.filter((e) => e.type === 'land');
+console.log('Scripted run (real course)');
+console.table(runA.events.map((e) => ({ ...e, height: e.height?.toFixed(2) })));
+console.log(`score ${runA.score} (twice → ${runA.score === runB.score && JSON.stringify(runA.events) === JSON.stringify(runB.events) ? 'identical' : 'DIFFERENT'}), perfects ${runA.perfects}, max combo ×${runA.maxCombo}, best ${runA.best.height.toFixed(2)} m ${runA.best.result}, rings ${runA.items.filter((i) => i.kind === 'ring' && i.hit).length}`);
+if (runA.score !== runB.score || JSON.stringify(runA.events) !== JSON.stringify(runB.events)) failures.push('scripted run scored differently twice');
+if (!lands.some((e) => e.mult >= 2)) failures.push('chained Perfects never raised the multiplier');
+if (!lands.some((e) => e.spins > 0)) failures.push('no 360 landed');
+if (runA.events.filter((e) => e.type === 'crash').length < 2) failures.push('late 360 and overload landings should both be wipeouts');
+
+// Ramp vs flat: the same perfect press from a settled cruise, released half-way up a ramp's face.
+const POP = [[WARMUP, WARMUP + 0.8]];
+const afterJump = (run, s, t) => t > WARMUP + 10;
+let release = null;
+const flat = ride(POP, [], afterJump, (s) => s.jumpResult && (release = s.pos.clone())).run.best.height;
+const ramped = ride(POP, [[release.x + GAME.ramp.halfLength / 2, 'ramp', 0, release.z]], afterJump).run.best.height;
+console.log(`Ramp: perfect pop on flat water ${flat.toFixed(2)} m, half-way up a ramp's face ${ramped.toFixed(2)} m`);
+if (!(ramped > flat)) failures.push(`ramp launch ${ramped.toFixed(2)} m not above flat ${flat.toFixed(2)} m`);
+
+// Rings: one placed where a perfect jump is 1 s after release scores; one a diameter higher or
+// outside the depth tolerance doesn't.
+let through = null;
+let releasedAt = null;
+ride(POP, [], afterJump, (s, run, t) => {
+  if (s.jumpResult) releasedAt = t;
+  if (releasedAt !== null && t - releasedAt <= 1) through = s.pos.clone();
+});
+const ringRows = [
+  ['through the centre', 0, 0, true],
+  ['a diameter too high', 2 * GAME.ringRadius, 0, false],
+  ['just inside the rim', 0.9 * GAME.ringRadius, 0, true],
+  ['beyond the depth tolerance', 0, 1.1 * GAME.ringDepth, false],
+].map(([where, dy, dz, expect]) => {
+  const { run } = ride(POP, [[through.x, 'ring', through.y + dy, through.z + dz]], afterJump);
+  const hit = run.items[0].hit;
+  if (hit !== expect) failures.push(`ring ${where}: hit ${hit}, expected ${expect}`);
+  return { ring: where, hit, points: run.score };
+});
+console.log(`Rings at ${through.y.toFixed(1)} m on a perfect jump's rise`);
+console.table(ringRows);
 
 if (failures.length) {
   console.error(`FAIL:\n  ${failures.join('\n  ')}`);

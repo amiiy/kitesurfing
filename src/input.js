@@ -1,5 +1,6 @@
 // One button: press and hold anywhere (mouse, touch, Space or any gamepad face button/trigger)
-// to edge and load the jump, release to pop. R / Start reset; M is handled by audio.js.
+// to edge and load the jump, release to pop. Real <button>s (Share) aren't presses. R / Start
+// restart the run; M is handled by audio.js.
 
 // Standard gamepad mapping (https://w3c.github.io/gamepad/#remapping): 0-3 face, 4-5 bumpers, 6-7 triggers.
 const PAD_PRESS = [0, 1, 2, 3, 4, 5, 6, 7];
@@ -18,7 +19,7 @@ export function createInput({ onReset }) {
     if (e.code === 'KeyR') onReset();
   });
   addEventListener('keyup', (e) => e.code === 'Space' && (space = false));
-  addEventListener('pointerdown', (e) => pointers.add(e.pointerId));
+  addEventListener('pointerdown', (e) => !e.target.closest?.('button') && pointers.add(e.pointerId));
   for (const type of ['pointerup', 'pointercancel']) addEventListener(type, (e) => pointers.delete(e.pointerId));
   addEventListener('contextmenu', (e) => e.preventDefault()); // long-press on phones
   addEventListener('blur', () => {
