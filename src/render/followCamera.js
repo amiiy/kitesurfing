@@ -21,6 +21,7 @@ export function createFollowCamera(camera) {
   let charge = 0; // smoothed state.charge
   let ready = 0; // smoothed 0..1: charge is in the sweet spot
   let lean = 0; // smoothed side the rider leans to: -1 screen left, +1 screen right
+  let looking = CAMERA.lookTowardKite;
   let air = 0; // smoothed 0..1 airborne height factor
   let wasAirborne = false;
   let popKick = 0; // degrees of FOV kick left from the last takeoff
@@ -59,7 +60,8 @@ export function createFollowCamera(camera) {
       position.z += (desired.z - position.z) * k;
 
       // Aim a little ahead along horizontal travel so the rider isn't chasing the frame edge.
-      desired.lerpVectors(riderPosition, kitePosition, CAMERA.lookTowardKite);
+      looking += ((state.loop ? CAMERA.loopLookTowardKite : CAMERA.lookTowardKite) - looking) * ease(FEEL.airRate);
+      desired.lerpVectors(riderPosition, kitePosition, looking); // a kiteloop pulls the aim up to keep the kite in frame
       desired.x += state.vel.x * FEEL.lookAhead;
       desired.z += state.vel.z * FEEL.lookAhead;
       target.lerp(desired, k);

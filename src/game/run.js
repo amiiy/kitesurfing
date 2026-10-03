@@ -31,6 +31,7 @@ const COURSE = [
   [1180, 'ring', 8],
   [1250, 'buoys'],
 ];
+export const COURSE_LENGTH = COURSE.at(-1)[0]; // m: the last object; the finish arch and lighthouse stand here
 
 // phase: 'title' (attract mode: the rider cruises, no rules) | 'playing' | 'results'.
 // `course` rows may carry a 4th value, z, to place an object directly (sim-check).
@@ -49,7 +50,8 @@ export function createRun(phase = 'playing', course = COURSE) {
     jump: null, // { result, mult } of the jump in the air
     grab: false,
     spins: 0, // 360s started this jump
-    tapAt: null, // time of a tap that is a grab unless a second tap follows within GAME.doubleTap
+    tapAt: null,
+    pressAt: null, // time the current air press began (a long one is a kiteloop) // time of a tap that is a grab unless a second tap follows within GAME.doubleTap
     armed: false, // the press that started the run doesn't count until it is let go
     wasDown: false,
   };
@@ -67,13 +69,14 @@ export function stepRun(run, s, button, dt, t) {
   run.wasDown = down;
   const { x: x0, y: y0, z: z0 } = s.pos;
 
+  s.speedLevel = run.combo;
   step(s, autopilot(s, down), dt, t);
   s.wipeout = Math.max(0, s.wipeout - dt);
   if (!playing) return;
 
   run.time -= dt;
   if (s.jumpResult) release(run, s);
-  if (s.airborne) air(run, s, tap, dt, t);
+  if (s.airborne) air(run, s, tap, down, dt, t);
   else if (s.landImpact > 0) land(run, s);
   course(run, s, x0, y0, z0, t);
   if (run.time <= 0 && !s.airborne) run.phase = 'results';
@@ -89,8 +92,26 @@ function release(run, s) {
 }
 
 // A tap is a grab unless a second tap follows within GAME.doubleTap: then it's a 360.
-function air(run, s, tap, dt, t) {
+// Holding past GAME.loopHold pulls a kiteloop instead: keep holding until the kite comes round,
+// let go early and it stalls (a wipeout on landing).
+function air(run, s, tap, down, dt, t) {
   if (s.wipeout) return;
+  if (tap) run.pressAt = t;
+  if (!down) run.pressAt = null;
+  if (s.loop && !s.loop.done && !down) s.loop.stalled = true;
+  if (!s.loop && run.pressAt !== null && t - run.pressAt >= GAME.loopHold) {
+    const [lo, hi] = GAME.loopPerfect;
+    s.loop = {
+      dir: Math.sign(s.forward.x) || 1, // back-hand loop: round through the power zone on the side of travel
+      turned: 0,
+      done: false,
+      stalled: false,
+      grade: s.vel.y > hi ? 'early' : s.vel.y < lo ? 'late' : 'perfect',
+      mega: s.pos.y - s.takeoffY >= GAME.megaHeight,
+    };
+    run.tapAt = null; // the press was a pull, not a grab
+    return;
+  }
   if (tap && run.tapAt !== null) {
     run.tapAt = null;
     run.spins++;
@@ -106,19 +127,23 @@ function air(run, s, tap, dt, t) {
 // Straight landings score the jump and its tricks; landing mid-rotation or an overloaded pop is a wipeout.
 function land(run, s) {
   const { jump } = run;
-  if (!s.wipeout && (jump?.result === 'overload' || run.spins * TAU - s.trickSpin > GAME.spinSlack)) wipe(run, s, 'crash');
+  const loop = s.loop;
+  if (!s.wipeout && (jump?.result === 'overload' || run.spins * TAU - s.trickSpin > GAME.spinSlack || (loop && !loop.done))) wipe(run, s, 'crash');
   else if (jump) {
     const height = s.airHeight;
-    const tricks = (run.grab ? GAME.grabPoints : 0) + run.spins * GAME.spinPoints;
+    const loopPts = loop ? GAME.loopPoints[loop.grade] * (loop.mega ? GAME.megaBonus : 1) : 0;
+    const tricks = (run.grab ? GAME.grabPoints : 0) + run.spins * GAME.spinPoints + loopPts;
     const points = Math.round((height * GAME.pointsPerMetre * GAME.quality[jump.result] + tricks) * jump.mult);
     run.score += points;
     if (height > run.best.height) run.best = { height, result: jump.result };
-    run.events.push({ type: 'land', points, height, mult: jump.mult, result: jump.result, grab: run.grab, spins: run.spins });
+    run.events.push({ type: 'land', points, height, mult: jump.mult, result: jump.result, grab: run.grab, spins: run.spins, loop: loop && `${loop.mega ? 'megaloop' : 'kiteloop'} ${loop.grade}` });
   }
   run.jump = null;
   run.grab = false;
   run.spins = 0;
   run.tapAt = null;
+  run.pressAt = null;
+  s.loop = null;
   s.trick = null;
   s.trickSpin = 0;
 }

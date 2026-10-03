@@ -3,33 +3,34 @@
 
 export const WIND = {
   strength: 1.5, // base multiplier on kite speed and pull
-  gustAmount: 0, // +/- fraction the wind swings around its base strength (0: steady, predictable)
   knots: 18, // shown on the HUD at strength 1
+};
+
+// Swell (src/waves.js). Wind is picked on the title screen.
+export const SEA = {
+  // rad the swell travels off the wind: onshore runs with it, side-onshore comes at the rider (riding right).
+  wind: { onshore: 0, sideOnshore: -Math.PI / 4 },
+  // m of open water upwind: a fetch-limited (JONSWAP) sea, peaking at ~46 m waves, Hs ~1.9 m in 27 kn
+  fetch: 47000,
 };
 
 export const KITE = {
   lineLength: 15, // m
   // A high-power big-air kite (Core Nexus style): pulls hard parked at the window edge.
-  edge: 1.35, // rad from the window centre (straight downwind) to its edge, where the wind stops driving the kite
+  edge: 1.35, // rad from the window centre (straight downwind) to its edge, ≈ atan(liftDrag): the kite parks there
+  startClock: 0.15, // rad clock angle a run starts the kite at: near 12 o'clock, little pull (waterstart)
   park: Math.PI / 3, // rad clock angle on the edge the kite is parked at: 60° from 12 o'clock = 10/2 o'clock
   turnRadius: 4, // m; tightest turn, at full steering: turn rate = airspeed / turnRadius
   rollResponse: 14, // 1/s; how fast the turn rate follows the steering as the kite rolls into a turn
-  edgeSpeed: 12, // m/s of airspeed at the window edge (per unit of wind strength)
-  poweredSpeed: 8, // extra m/s dead downwind
+  liftDrag: 4.5, // L/D: crosswind the kite flies at this times the wind blowing along its lines; edge = atan(L/D)
   diveBoost: 0.3, // target speed is this much higher flying straight down, lower flying straight up
-  speedResponse: 1.5, // 1/s; how fast the kite's speed follows its target
-  edgeApproach: 3, // 1/s; flown out to the edge the kite closes the gap at this rate: it eases on, never past
-  edgePower: 0.95, // line tension at the edge, as a share of dead downwind; power = tension · cos(el)
-  motionPower: 0.08, // extra power per edge airspeed of kite motion across the window (parked: none)
-  maxPower: 1.3,
+  speedResponse: 3, // 1/s; how fast the kite's speed follows its target
+  edgeReturn: 3, // 1/s; a kite carried past the edge luffs and eases back at this rate
+  tension: 7, // m/s² of line pull at power 1: parked on the edge in the base wind, rider still
+  maxPower: 2, // power the rider sheets out at: a dive or loop pulls up to this
   powerResponse: 2.9, // 1/s; power eases toward its target (line tension), ~0.35 s time constant
-  climbLift: 0.3, // extra kite.lift per rad/s the kite climbs
   minElevation: 0.1, // rad; just above the water
   recoverRate: 4, // how fast the kite turns back upward at the water
-  maxPull: 12, // m/s² at full power, rider stationary
-  slackPerSpeed: 0.4, // pull lost per m/s of rider speed toward the kite
-  airPullFactor: 0.3, // share of horizontal pull applied while airborne
-  maxLift: 6.5, // m/s² of upward lift with the kite overhead
   crashElevation: 0.15, // rad; at or below this the kite can hit the water...
   crashWindow: 0.4, // ...and crashes if its window position (cos az · cos el) is below this
   relaunchRate: 0.5, // rad/s the kite climbs while relaunching
@@ -49,10 +50,18 @@ export const AUTOPILOT = {
 export const BOARD = {
   course: 90, // degrees off the wind, riding right: a beam reach (fixed, no steering)
   edgePoint: 0.25, // rad the board carves higher upwind at full edge
+  carveRate: 1.5, // 1/s the board turns back onto the course after a downwind landing
   edgeResponse: 6, // how quickly edge pressure follows the button
-  linearDrag: 0.35,
-  quadraticDrag: 0.045,
-  waveGravity: 0.35, // share of gravity along the wave slope: climbing a face slows you, descending speeds you up
+  linearDrag: 0.15,
+  quadraticDrag: 0.037,
+  ploughDrag: 1.5, // 1/s extra drag off the plane, easing out (squared) as the board gets up...
+  planeSpeed: [2.5, 4.5], // ...from the first m/s to fully planing at the second
+  comboSpeed: 0.3, // each Perfect in the combo divides quadratic drag by (1 + comboSpeed · combo)...
+  comboMax: 4, // ...up to this combo
+  // Water holding the board up: a spring (1/s², m/s² per m sunk) stiffening as it planes, and damping (1/s).
+  floatStiffness: 60,
+  planeStiffness: 400,
+  supportDamping: 20,
   // Sideways resistance: a loose board skids downwind, an edged board bites.
   baseGrip: 1.0,
   edgeGrip: 8,
@@ -68,8 +77,15 @@ export const JUMP = {
   minSpeed: 2, // m/s needed to pop (fastest speed seen while charging)
   basePop: 1.5, // m/s
   speedPop: 0.22, // m/s of pop per m/s of board speed, at full quality
-  kitePop: 5, // m/s of pop from the kite, at full quality
+  kitePop: 4, // m/s of pop per unit of kite power (line tension at the pop), at full quality
+  waveKick: 1.5, // share of the swell's lift under the board (waveRise) added to a pop: up a face kicks, over the back nothing
   gravity: 9.8,
+  liftOff: 0.3, // m clear of the water without a pop (lofted by a gust) that counts as airborne
+  downwindKick: { perfect: 0.5, early: 1.5, overload: 5 }, // m/s downwind added at the pop, by release
+  airDrag: 0.003, // 1/m: ½ρ·CdA/m of the rider in the air (~0.5 m² frontal, 80 kg); the wind carries them downwind
+  softLanding: 7, // m/s of impact (vertical speed into the water surface) landed without losing speed...
+  landLoss: 0.05, // ...beyond it, board speed is divided by (1 + landLoss · excess)
+  landTurnRate: 2.5, // 1/s the rider swings the board toward the travel direction while coming down
 };
 
 // Runs, scoring, tricks and the course (src/game/run.js).
@@ -84,7 +100,13 @@ export const GAME = {
   ringPoints: 200,
   doubleTap: 0.3, // s; a second tap in the air within this is a 360, otherwise the tap is a grab
   spinTime: 0.8, // s per 360
-  spinSlack: 0.35, // rad short of a full turn that still lands
+  spinSlack: 0.35,
+  // Kiteloop: hold in the air (src/game/run.js). Graded by vertical speed at the pull: just before the apex is Perfect.
+  loopHold: 0.25, // s held in the air before it's a loop, not a tap (< doubleTap)
+  loopPerfect: [1, 4], // m/s of vertical speed at the pull for a Perfect; faster up is early, below is late
+  loopPoints: { perfect: 400, early: 200, late: 150 },
+  megaHeight: 14, // m above takeoff at the pull for a megaloop: points ×megaBonus
+  megaBonus: 2, // rad short of a full turn that still lands
   wipeoutTime: 1.5, // s down after a crash or hit: no input
   wipeoutSpeed: 0.3, // share of board speed kept by a crash or hit
   // Course objects are fixed in x; z is fixed lockDistance m ahead (off screen) on the rider's predicted line.
@@ -100,6 +122,7 @@ export const CAMERA = {
   fov: 60,
   offset: [0, 3.2, 17], // relative to the rider, upwind and above
   lookTowardKite: 0.35, // 0 = look at rider, 1 = look at kite
+  loopLookTowardKite: 0.6, // ...during a kiteloop
 };
 
 export const POSE = {

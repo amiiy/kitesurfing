@@ -37,6 +37,10 @@
       #stats dt { text-align: right; opacity: .8; }
       #stats dd { margin: 0; text-align: left; font-weight: 700; }
       #share { padding: 10px 28px; border: 0; border-radius: 22px; font: 700 18px system-ui, sans-serif; color: #1d1d28; background: #ffd21f; cursor: pointer; }
+      #level-pick { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+      #level-pick button { display: flex; flex-direction: column; gap: 2px; padding: 10px 22px; border: 0; border-radius: 22px; font: 700 18px system-ui, sans-serif; color: #1d1d28; background: #ffd21f; cursor: pointer; }
+      #level-pick small { font-size: 12px; font-weight: 400; }
+      #title:not(.ready) #level-pick { visibility: hidden; }
       #loading { display: flex; flex-direction: column; align-items: center; gap: 10px; }
       #loading > div { width: 200px; height: 4px; background: #fff3; }
       #loading > div > div { width: 0; height: 100%; background: #4cf; transition: width .2s; }
@@ -46,8 +50,9 @@
     <div id="title" class="screen">
       <h1>Kite Runner</h1>
       <div id="loading">Loading…<div><div></div></div></div>
-      <div class="tap">Tap to start</div>
-      <div class="how">Hold to load the jump, release in the green for a <b>Perfect</b>. Chain Perfects for ×2, ×3…<br />In the air: tap to grab, double-tap to 360, and land it straight.<br />Pop off swells, fly through rings, clear the buoys and boats. 75 seconds!</div>
+      <div class="tap">Pick a level</div>
+      <div id="level-pick"></div>
+      <div class="how">Hold to load the jump, release in the green for a <b>Perfect</b>. Chain Perfects for ×2, ×3…<br />In the air: tap to grab, double-tap to 360, hold to kiteloop (pull just before the top, hold till it comes round), and land it straight.<br />Pop off the rising face of a wave to go higher, fly through rings, clear the buoys and boats. 75 seconds!</div>
     </div>
     <div id="results" class="screen" hidden>
       <h2>Time!</h2>
@@ -75,7 +80,7 @@
       <div id="power" class="bar"><div></div></div>
       <span>JUMP</span>
       <div id="charge" class="bar"><div id="sweet"></div><div></div></div>
-      <div id="help">Hold to edge &amp; load · release to jump · in the air: tap grab, double-tap 360 · R restart · M mute</div>
+      <div id="help">Hold to edge &amp; load · release to jump · in the air: tap grab, double-tap 360, hold kiteloop · R restart · M mute</div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

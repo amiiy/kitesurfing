@@ -6,7 +6,7 @@ import { inSweetSpot } from '../feel.js';
 // the release cues (screen flash and spray bursts).
 
 // ---------- spray: pooled point particles ----------
-function createSpray(max = 2000) {
+export function createSpray(max = 2000) {
   const pos = new Float32Array(max * 3);
   const vel = new Float32Array(max * 3);
   const life = new Float32Array(max); // remaining life (s)

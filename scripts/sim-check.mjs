@@ -1,8 +1,8 @@
 // Headless rides through the real step() and autopilot at 60 Hz, driven exactly like main.js: the
-// only input is the button. Prints tables; exits 1 on a kite crash, a cruise under 35 km/h, a jump
+// only input is the button. Prints tables; exits 1 on a kite crash, a base cruise under 33 km/h, a jump
 // table that isn't ordered early < perfect > overload, any difference between two identical runs,
 // a scripted game run that scores differently twice or misses its combo/crash rules, a ramp pop no
-// higher than a flat one, or wrong ring hit detection.
+// higher than a flat one, wrong ring hit detection, or kiteloop timing that doesn't grade early/perfect/crash.
 // Run: npm run sim:check
 import { createState, step } from '../src/sim/physics.js';
 import { autopilot } from '../src/sim/autopilot.js';
@@ -13,7 +13,7 @@ import { GAME } from '../src/config.js';
 const DT = 1 / 60;
 const KMH = 3.6;
 const WARMUP = 20; // s from a standstill: speed and kite settled before anything is measured
-const MIN_KMH = 35;
+const MIN_KMH = 33; // base cruise; Perfect combos raise it
 const failures = [];
 
 const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
@@ -167,9 +167,9 @@ function ride(presses, course, until = (run) => run.phase !== 'playing', each = 
 
 // A full 75 s run over the real course: a jump every 8 s with a scripted hold and air taps.
 const PLAN = [
-  [0.8], [0.8, 'grab'], [0.85, 'spin'], [0.5, 'spin'], [0.8], [0.8, 'late spin'], [0.95], [0.8, 'grab'], [0.8], [0.8],
+  [0.8], [0.8, 'grab'], [0.85, 'spin'], [0.5, 'spin'], [0.8], [0.8, 'late spin'], [0.8, 'grab'], [0.95], [0.8], [0.8],
 ];
-const TAPS = { grab: [1], spin: [0.6, 0.8], 'late spin': [4.6, 4.75] }; // s after release; a late 360 can't finish
+const TAPS = { grab: [1], spin: [0.6, 0.8], 'late spin': [3.1, 3.25] }; // s after release (a perfect hangs ~3.7 s); a late 360 can't finish
 const presses = PLAN.flatMap(([hold, trick], k) => {
   const at = 1 + 8 * k;
   return [[at, at + hold], ...(TAPS[trick] ?? []).map((d) => [at + hold + d, at + hold + d + 0.05])];
@@ -216,6 +216,23 @@ const ringRows = [
 });
 console.log(`Rings at ${through.y.toFixed(1)} m on a perfect jump's rise`);
 console.table(ringRows);
+
+// Kiteloops: the same perfect pop, then a held pull `d` s after release. Just before the apex lands a
+// Perfect loop; too late and the rider drops before the kite comes round (wipeout).
+const loopRows = [['early', 0.3], ['perfect', 1.5], ['late', 2.6]].map(([expect, d]) => {
+  let rel = null;
+  const { run } = ride([[WARMUP, WARMUP + 0.8]], [], afterJump, (s, r, t) => {
+    if (s.jumpResult) rel = t;
+  });
+  // second pass with the pull, now that the release time is known
+  const pull = ride([[WARMUP, WARMUP + 0.8], [rel + d, rel + d + 2.5]], [], (r, s, t) => t > rel + d + 2.5 && !s.airborne).run;
+  const e = pull.events[0];
+  const got = e?.type === 'land' ? e.loop.split(' ')[1] : e?.type;
+  if (expect === 'late' ? got !== 'crash' : got !== expect) failures.push(`kiteloop pulled ${d} s after release: ${got}, expected ${expect === 'late' ? 'crash' : expect}`);
+  return { pull: `${d} s`, expect, got, points: pull.score, plainJump: run.score };
+});
+console.log('Kiteloops');
+console.table(loopRows);
 
 if (failures.length) {
   console.error(`FAIL:\n  ${failures.join('\n  ')}`);

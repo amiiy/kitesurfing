@@ -108,25 +108,38 @@ export function createKiteModel() {
   };
 }
 
-// Two flying lines; endpoints rewritten in place every frame.
+const SEGMENTS = 16; // per flying line
+const SAG = 0.2; // m the lines bow at power 1 (parked); like a catenary, sag ∝ 1 / tension...
+const MAX_SAG = 2.5; // ...up to this when slack (a lull, a crashed kite)
+
+// Two flying lines, rebuilt in place every frame. They bow under their weight more the less the
+// kite pulls: taut in a dive, sagging in a lull or after a crash.
 export function createKiteLines() {
   const group = new THREE.Group();
   const material = new THREE.LineBasicMaterial({ color: 0x222222 });
   const lines = [0, 1].map(() => {
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(3 * (SEGMENTS + 1)), 3));
     const line = new THREE.Line(geo, material);
     line.frustumCulled = false;
     group.add(line);
     return line;
   });
+  const dir = new THREE.Vector3();
+  const sag = new THREE.Vector3();
 
   return {
     group,
-    set(i, from, to) {
+    set(i, from, to, power) {
+      dir.subVectors(to, from).normalize();
+      // Gravity's part across the line (a line straight up hardly bows), as deep as the tension allows.
+      sag.set(0, -1, 0).addScaledVector(dir, dir.y).multiplyScalar(Math.min(MAX_SAG, SAG / Math.max(power, 1e-3)));
       const attr = lines[i].geometry.attributes.position;
-      attr.setXYZ(0, from.x, from.y, from.z);
-      attr.setXYZ(1, to.x, to.y, to.z);
+      for (let k = 0; k <= SEGMENTS; k++) {
+        const u = k / SEGMENTS;
+        const bow = 4 * u * (1 - u); // parabola: 0 at the ends, 1 mid-line
+        attr.setXYZ(k, from.x + (to.x - from.x) * u + sag.x * bow, from.y + (to.y - from.y) * u + sag.y * bow, from.z + (to.z - from.z) * u + sag.z * bow);
+      }
       attr.needsUpdate = true;
     },
   };

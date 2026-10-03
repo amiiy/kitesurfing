@@ -1,16 +1,19 @@
 import { MathUtils, Vector3 } from 'three';
 import { BOARD, JUMP, KITE, WIND } from '../config.js';
-import { rampAt, waveHeight, waveSlope } from '../waves.js';
+import { rampAt, waveHeight, waveRise, waveSlope } from '../waves.js';
+import { windAt } from './wind.js';
 
 // Pure simulation: no scene objects. Renderers and effects read `state` after each step.
 
 // Board yaw on the fixed course (riding right); 0 would be straight downwind.
+const KNOT = 0.5144; // m/s
 const COURSE = -(Math.PI - MathUtils.degToRad(BOARD.course));
+const BASE_WIND = WIND.knots * WIND.strength * KNOT; // m/s at gust 1
 
 export function createState() {
   return {
     pos: new Vector3(),
-    vel: new Vector3(), // includes vertical speed while airborne
+    vel: new Vector3(), // m/s; vertical too: the board rides the water on a spring, and flies
     yaw: COURSE, // board heading; 0 = straight downwind
     edge: 0, // 0..1 heel-edge pressure; 1 while the button is held
     charge: 0, // 0..1 jump load, rising at JUMP.chargeRate while the button is held
@@ -21,9 +24,12 @@ export function createState() {
     airHeight: 0,
     bestJump: 0,
     landImpact: 0, // vertical speed on the frame of touchdown, 0 otherwise
-    gust: 1, // current wind multiplier (1 = base strength)
+    gust: 1, // current wind multiplier (1 = base strength): the level's wind plan (src/sim/wind.js)
+    plane: 0, // 0..1 how far the board is up on the plane, by speed (BOARD.planeSpeed)
+    speedLevel: 0, // set by the game rules: the Perfect combo, raising top speed (BOARD.comboSpeed)
     // Set by the game rules (src/game/run.js); renderers show them.
     trick: null, // 'grab' | 'spin' while airborne
+    loop: null, // kiteloop this jump: { dir, turned (rad), done, stalled, grade, mega }; the autopilot yields while it runs
     trickSpin: 0, // rad of extra rider/board yaw from a 360 in progress (0..2π per spin)
     wipeout: 0, // s left of a crash: input ignored, rider down
 
@@ -43,11 +49,6 @@ export function kiteDirection({ az, el }, out) {
   return out.set(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
 }
 
-// Wind strength multiplier: two slow sines give irregular gusts and lulls.
-export function gustAt(t) {
-  return 1 + WIND.gustAmount * (0.65 * Math.sin(t * 0.35) + 0.35 * Math.sin(t * 0.93 + 1.7));
-}
-
 // Board nose and right-hand vectors for the current yaw.
 export function orientBoard(s) {
   s.forward.set(-Math.sin(s.yaw), 0, -Math.cos(s.yaw));
@@ -57,26 +58,40 @@ export function orientBoard(s) {
 export function step(s, controls, dt, t) {
   s.landImpact = 0;
   s.jumpResult = null;
-  s.gust = gustAt(t);
-  const wind = WIND.strength * s.gust;
-  stepKite(s.kite, controls, wind, dt);
+  s.gust = windAt(t);
+  const wind = BASE_WIND * s.gust; // m/s
+  const looping = s.loop && !s.loop.done && !s.loop.stalled;
+  kiteDirection(s.kite, s.kiteDir);
+  // Wind along the lines, less the rider's speed toward the kite: riding at it slackens them.
+  const along = Math.max(0, -wind * s.kiteDir.z - s.vel.dot(s.kiteDir));
+  // The kite flies in the wind relative to the rider: drifting downwind takes some off it, edging
+  // upwind adds some. (Not their speed across the wind: this window is the fixed beam-reach course's.)
+  stepKite(s.kite, controls, Math.max(0, wind + s.vel.z), along, dt);
+  if (looping) {
+    s.loop.turned += Math.abs(s.kite.turn) * dt;
+    s.loop.done = s.loop.turned >= 2 * Math.PI;
+  }
 
   kiteDirection(s.kite, s.kiteDir);
   s.pullDir.set(s.kiteDir.x, 0, s.kiteDir.z).normalize();
-  // Riding toward the kite slackens the lines; riding away from it loads them up.
-  const pull = Math.max(0, KITE.maxPull * wind * s.kite.power - KITE.slackPerSpeed * s.vel.dot(s.pullDir));
+  const pull = KITE.tension * s.kite.power; // m/s² along the lines, on the water and in the air
 
   // The board holds a fixed course; holding the button digs the edge in, which carves it higher upwind.
+  // After a downwind landing it carves back up onto the course at BOARD.carveRate.
+  // In the air, coming down, the rider points the board where they're travelling: landing downwind.
   if (!s.airborne) {
     s.edge = MathUtils.lerp(s.edge, Number(controls.jump), 1 - Math.exp(-BOARD.edgeResponse * dt));
-    s.yaw = COURSE - BOARD.edgePoint * s.edge;
+    s.yaw += (COURSE - BOARD.edgePoint * s.edge - s.yaw) * (1 - Math.exp(-BOARD.carveRate * dt));
+  } else if (s.vel.y < 0 && Math.hypot(s.vel.x, s.vel.z) > 1) {
+    const travel = Math.atan2(-s.vel.x, -s.vel.z); // yaw convention: 0 = straight downwind
+    s.yaw += Math.atan2(Math.sin(travel - s.yaw), Math.cos(travel - s.yaw)) * (1 - Math.exp(-JUMP.landTurnRate * dt));
   }
   orientBoard(s);
 
   const waterY = waveHeight(s.pos.x, s.pos.z, t);
   waveSlope(s.pos.x, s.pos.z, t, s.slope);
-  if (s.airborne) stepAir(s, pull, waterY, dt);
-  else stepWater(s, pull, controls.jump, waterY, dt);
+  if (s.airborne) stepAir(s, pull, wind, waterY, dt, t);
+  else stepWater(s, pull, controls.jump, waterY, dt, t);
 }
 
 // Unit vector `theta` rad from the window centre (straight downwind) at clock angle `clock`
@@ -85,9 +100,10 @@ export function windowPoint(theta, clock, out) {
   return out.set(Math.sin(theta) * Math.sin(clock), Math.sin(theta) * Math.cos(clock), -Math.cos(theta));
 }
 
-// Parked on the window edge at 2 o'clock (the rider starts riding right), nose out into the wind.
+// Waterstart: on the window edge near 12 o'clock with little pull; the autopilot dives it down
+// to the park spot at 2 o'clock (the rider starts riding right).
 function parkedKite() {
-  const p = windowPoint(KITE.edge, KITE.park, new Vector3());
+  const p = windowPoint(KITE.edge, KITE.startClock, new Vector3());
   const az = Math.atan2(p.x, -p.z);
   const el = Math.asin(p.y);
   return {
@@ -95,54 +111,53 @@ function parkedKite() {
     el, // elevation: 0 = water, PI/2 = zenith
     heading: Math.atan2(Math.sin(az), Math.cos(az) * Math.sin(el)), // direction the nose points on the window: 0 = up, +right
     turn: 0, // rad/s the heading is turning; lags the steering as the kite rolls into a turn
-    speed: WIND.strength * KITE.edgeSpeed, // airspeed along the heading, m/s; lags behind its target
-    power: 0, // 0..KITE.maxPower: horizontal pull, set by where the kite sits in the window
-    lift: 0, // upward pull on the rider: elevation plus the kite's climb
+    speed: KITE.liftDrag * BASE_WIND * Math.cos(KITE.edge), // airspeed along the heading, m/s; lags behind its target
+    power: 0, // 0..KITE.maxPower: line tension; 1 = parked on the edge in the base wind
     crashed: false, // lying on the water until it relaunches itself
   };
 }
 
-// A big-air kite on 15 m lines. It flies nose-first: steering rolls it into a turn of fixed radius,
-// the wind drives it fastest deep in the window and barely at the edge, and flown out to the edge it
-// slows as the wind stops driving it, settling there nose-out: parked, with steady pull.
-function stepKite(kite, controls, wind, dt) {
+// A big-air kite on 15 m lines, flying nose-first: steering rolls it into a turn of fixed radius.
+// Crosswind law: the wind blowing along the lines (wind · cosθ, θ from the window centre) drives it
+// across them at KITE.liftDrag times that, fastest deep downwind. The wind also pushes it along the
+// window toward the centre (wind · sinθ): flown nose-out the two cancel at the edge (tanθ = L/D), so
+// it parks there with steady pull. `along`: m/s of apparent wind along the lines at the rider.
+function stepKite(kite, controls, wind, along, dt) {
   if (kite.crashed) return stepCrashed(kite, dt);
   const { az, el } = kite;
   const L = KITE.lineLength;
-  const theta = Math.acos(Math.cos(az) * Math.cos(el)); // angle from the window centre
-  const depth = Math.max(0, KITE.edge - theta) / KITE.edge; // 1 dead downwind, 0 on the edge
+  const cosTheta = Math.cos(az) * Math.cos(el);
+  const theta = Math.acos(cosTheta); // angle from the window centre
 
   kite.turn += ((controls.kiteSteer * kite.speed) / KITE.turnRadius - kite.turn) * (1 - Math.exp(-KITE.rollResponse * dt));
   kite.heading += kite.turn * dt;
-  const target = wind * (KITE.edgeSpeed + KITE.poweredSpeed * depth) * (1 - KITE.diveBoost * Math.cos(kite.heading));
+  const target = KITE.liftDrag * wind * Math.max(0, cosTheta) * (1 - KITE.diveBoost * Math.cos(kite.heading));
   kite.speed += (target - kite.speed) * (1 - Math.exp(-KITE.speedResponse * dt));
 
-  // Velocity on the window (up, right). The part heading out of the window is capped to close the
-  // gap to the edge at KITE.edgeApproach, so the kite eases onto the edge (and back if it drifts past).
-  let up = kite.speed * Math.cos(kite.heading);
-  let right = kite.speed * Math.sin(kite.heading);
-  const sinTheta = Math.max(Math.sin(theta), 1e-6);
-  const outUp = (Math.cos(az) * Math.sin(el)) / sinTheta; // unit vector away from the window centre
-  const outRight = Math.sin(az) / sinTheta;
-  const excess = up * outUp + right * outRight - KITE.edgeApproach * (KITE.edge - theta) * L;
-  if (excess > 0) {
-    up -= excess * outUp;
-    right -= excess * outRight;
+  // Velocity on the window (up, right): airspeed along the heading plus the wind's push toward the centre.
+  let up = kite.speed * Math.cos(kite.heading) - wind * Math.cos(az) * Math.sin(el);
+  let right = kite.speed * Math.sin(kite.heading) - wind * Math.sin(az);
+  // Speed lags, so a fast kite can carry past the edge: there it luffs and eases back at KITE.edgeReturn.
+  const over = theta - KITE.edge;
+  if (over > 0) {
+    const outUp = (Math.cos(az) * Math.sin(el)) / Math.sin(theta); // unit vector away from the window centre
+    const outRight = Math.sin(az) / Math.sin(theta);
+    const excess = up * outUp + right * outRight + KITE.edgeReturn * over * L;
+    if (excess > 0) {
+      up -= excess * outUp;
+      right -= excess * outRight;
+    }
   }
   kite.el += (up * dt) / L;
   kite.az += (right * dt) / (L * Math.cos(el));
   kite.heading += (right * Math.tan(el) * dt) / L; // flying straight over a sphere follows a great circle
 
-  // Pull comes from where the kite sits: strong anywhere low (a parked kite pulls hard), strongest
-  // deep downwind, little overhead where the line points up. Moving adds only a little.
-  const motion = Math.hypot(up, right) / (wind * KITE.edgeSpeed);
-  const targetPower = Math.min(
-    KITE.maxPower,
-    Math.cos(kite.el) * (KITE.edgePower + (1 - KITE.edgePower) * depth) + KITE.motionPower * motion
-  );
+  // Line tension ∝ apparent wind²: the wind along the lines and the kite's airspeed across them.
+  // Parked on the edge the kite sees the whole wind (power 1 in the base wind); diving through the
+  // window it pulls several times that, gusts with their square. Past maxPower the rider sheets out.
+  const targetPower = Math.min(KITE.maxPower, (along * along + kite.speed * kite.speed) / BASE_WIND ** 2);
   // Line tension doesn't jump with every swing of the kite: power eases toward its target.
   kite.power += (targetPower - kite.power) * (1 - Math.exp(-KITE.powerResponse * dt));
-  kite.lift = Math.sin(kite.el) + (KITE.climbLift * Math.max(0, up)) / L;
 
   // The water: the kite can't fly into it and noses back up.
   if (kite.el < KITE.minElevation) {
@@ -154,7 +169,6 @@ function stepKite(kite, controls, wind, dt) {
   if (kite.el <= KITE.crashElevation && Math.cos(kite.az) * Math.cos(kite.el) < KITE.crashWindow) {
     kite.crashed = true;
     kite.power = 0;
-    kite.lift = 0;
     kite.el = 0;
   }
 }
@@ -175,29 +189,51 @@ function stepCrashed(kite, dt) {
 
 // On the water the board acts like a keel: it slides freely along its length but resists
 // sideways motion, so the pull component along the board drives it forward. Edging bites harder
-// and points higher: less downwind drift and more ground upwind, for a little less speed.
-function stepWater(s, pull, jump, waterY, dt) {
+// and points higher: less downwind drift and more ground upwind, and the upwind speed loads the kite.
+// Vertically the water holds it up like a spring-damper, far stiffer planing than wallowing; the
+// kite's lift takes weight off it, and off a crest that falls away faster than that it goes light.
+function stepWater(s, pull, jump, waterY, dt, t) {
   let vf = s.vel.dot(s.forward);
   let vl = s.vel.dot(s.side);
-  const pullF = pull * s.pullDir.dot(s.forward);
-  const pullL = pull * s.pullDir.dot(s.side);
-  // Gravity along the wave face: slows you climbing it, speeds you down the back.
-  const waveF = -BOARD.waveGravity * JUMP.gravity * (s.slope.x * s.forward.x + s.slope.z * s.forward.z);
+  const ramp = rampAt(s.pos.x, s.pos.z);
+  const surfaceRise = waveRise(s.pos.x, s.pos.z, t, s.vel.x, s.vel.z) + s.vel.x * ramp.x + s.vel.z * ramp.z; // m/s
+  s.plane = MathUtils.smoothstep(Math.abs(vf), BOARD.planeSpeed[0], BOARD.planeSpeed[1]);
+  const stiffness = MathUtils.lerp(BOARD.floatStiffness, BOARD.planeStiffness, s.plane);
+  const support = Math.max(0, stiffness * (waterY - s.pos.y) + BOARD.supportDamping * (surfaceRise - s.vel.y)); // m/s², water can't pull down
+  s.vel.y += (support + pull * s.kiteDir.y - JUMP.gravity) * dt;
 
-  vf += (pullF + waveF - BOARD.linearDrag * vf - BOARD.quadraticDrag * vf * Math.abs(vf)) * dt;
+  // The water pushes square to its surface: on a face the support tips back (slows you climbing it,
+  // speeds you down the back) and sideways.
+  const pullF = pull * s.kiteDir.dot(s.forward) - support * (s.slope.x * s.forward.x + s.slope.z * s.forward.z);
+  const pullL = pull * s.kiteDir.dot(s.side) - support * (s.slope.x * s.side.x + s.slope.z * s.side.z);
+
+  // Off the plane (below BOARD.planeSpeed) the board ploughs: extra drag, fading out as it gets up.
+  // A Perfect combo cuts the drag so top speed climbs.
+  const plough = BOARD.ploughDrag * (1 - s.plane) ** 2;
+  const quad = BOARD.quadraticDrag / (1 + BOARD.comboSpeed * Math.min(s.speedLevel, BOARD.comboMax));
+  vf += (pullF - (BOARD.linearDrag + plough) * vf - quad * vf * Math.abs(vf)) * dt;
   const grip = BOARD.baseGrip + BOARD.edgeGrip * s.edge + BOARD.speedGrip * Math.abs(vf);
   vl = (vl + pullL * dt) / (1 + grip * dt); // implicit: stable for any grip
 
-  s.vel.copy(s.forward).multiplyScalar(vf).addScaledVector(s.side, vl);
+  s.vel.set(s.forward.x * vf + s.side.x * vl, s.vel.y, s.forward.z * vf + s.side.z * vl);
   s.pos.addScaledVector(s.vel, dt);
-  s.pos.y = waterY;
 
-  updateJumpCharge(s, jump, Math.hypot(vf, vl), waterY, dt);
+  // Carried clear of the water by the kite alone (a gust lofting the rider), no pop: airborne, no jump.
+  // Hops off chop don't count: the water catches the board again.
+  if (s.pos.y - waterY > JUMP.liftOff && pull * s.kiteDir.y > JUMP.gravity) {
+    s.airborne = true;
+    s.takeoffY = waterY;
+    s.airHeight = 0;
+    s.charge = 0;
+    s.chargeSpeed = 0;
+    return;
+  }
+  updateJumpCharge(s, jump, Math.hypot(vf, vl), waterY, dt, t);
 }
 
 // Hold to load the edge, release to pop. The charge rises at a steady rate: letting go inside the
 // sweet spot pops a perfect jump, earlier is weaker, later overloads. Pop grows with board speed.
-function updateJumpCharge(s, jumpHeld, speed, waterY, dt) {
+function updateJumpCharge(s, jumpHeld, speed, waterY, dt, t) {
   if (jumpHeld) {
     s.charge = Math.min(1, s.charge + JUMP.chargeRate * dt);
     s.chargeSpeed = Math.max(s.chargeSpeed, speed);
@@ -208,9 +244,14 @@ function updateJumpCharge(s, jumpHeld, speed, waterY, dt) {
   if (s.chargeSpeed > JUMP.minSpeed) {
     const [result, quality] = releaseQuality(s.charge);
     s.jumpResult = result;
-    // Popping on a kicker's face adds the rate the face lifts the board (static ramp: dh/dt = v·∇h).
+    // Popping on a rising face adds the rate it lifts the board: kicker ramps (static: dh/dt = v·∇h)
+    // fully, the moving swell by JUMP.waveKick. Steepest part of a face kicks most; backs and troughs don't.
     const ramp = rampAt(s.pos.x, s.pos.z);
-    s.vel.y = JUMP.basePop + quality * (JUMP.speedPop * speed + JUMP.kitePop) + Math.max(0, s.vel.x * ramp.x + s.vel.z * ramp.z);
+    const kick = Math.max(0, s.vel.x * ramp.x + s.vel.z * ramp.z) + JUMP.waveKick * Math.max(0, waveRise(s.pos.x, s.pos.z, t, s.vel.x, s.vel.z));
+    s.vel.y = JUMP.basePop + quality * (JUMP.speedPop * speed + JUMP.kitePop * s.kite.power) + kick;
+    // The kite sent to 12 also drags the rider downwind (-Z) off the lip: a little on a well-timed
+    // send, more on an early one (kite still low, pulling forward), a yank when it's overloaded (sent too far).
+    s.vel.z -= JUMP.downwindKick[result];
     s.airborne = true;
     s.takeoffY = waterY;
     s.airHeight = 0;
@@ -228,18 +269,30 @@ function releaseQuality(charge) {
   return ['overload', JUMP.overloadQuality];
 }
 
-function stepAir(s, pull, waterY, dt) {
-  s.vel.addScaledVector(s.pullDir, pull * KITE.airPullFactor * dt);
-  const lift = KITE.maxLift * s.kite.lift; // a kite sent overhead holds the rider up
-  s.vel.y += (lift - JUMP.gravity) * dt;
+function stepAir(s, pull, wind, waterY, dt, t) {
+  s.vel.addScaledVector(s.kiteDir, pull * dt);
+  s.vel.y -= JUMP.gravity * dt;
+  // Body drag in the wind (blowing toward -Z): carries the rider downwind and bleeds crosswind speed.
+  const rx = -s.vel.x, ry = -s.vel.y, rz = -wind - s.vel.z; // air relative to the rider
+  const drag = JUMP.airDrag * Math.hypot(rx, ry, rz) * dt;
+  s.vel.x += drag * rx;
+  s.vel.y += drag * ry;
+  s.vel.z += drag * rz;
   s.pos.addScaledVector(s.vel, dt);
   s.airHeight = Math.max(s.airHeight, s.pos.y - s.takeoffY);
 
   if (s.pos.y <= waterY && s.vel.y < 0) {
     s.airborne = false;
     s.pos.y = waterY;
-    s.landImpact = -s.vel.y;
-    s.vel.y = 0;
+    // Impact is the speed the water comes up at the board: a wave's back falling away softens it, a
+    // face rising into it hardens it. Past JUMP.softLanding the hit scrubs off board speed.
+    const ramp = rampAt(s.pos.x, s.pos.z);
+    const rise = s.vel.x * ramp.x + s.vel.z * ramp.z + waveRise(s.pos.x, s.pos.z, t, s.vel.x, s.vel.z);
+    s.landImpact = Math.max(0, rise - s.vel.y);
+    const keep = 1 / (1 + JUMP.landLoss * Math.max(0, s.landImpact - JUMP.softLanding));
+    s.vel.x *= keep;
+    s.vel.z *= keep;
+    s.vel.y = rise; // the board rides the surface from here
     s.bestJump = Math.max(s.bestJump, s.airHeight);
   }
 }

@@ -1,11 +1,12 @@
 import { FEEL, JUMP, WIND } from './config.js';
 import { multiplier } from './game/run.js';
+import { upcomingGusts } from './sim/wind.js';
 
 const GREEN = '#7dffa8';
 const YELLOW = '#ffd21f';
 const RED = '#ff6a4d';
 const RELEASE = { perfect: ['Perfect!', GREEN], early: ['Early', YELLOW], overload: ['Overloaded', RED], slow: ['Too slow!', YELLOW] };
-const TRICK = { grab: ['Grab!', YELLOW], spin: ['360!', YELLOW] };
+const TRICK = { grab: ['Grab!', YELLOW], spin: ['360!', YELLOW], loop: ['Kiteloop!', YELLOW], megaloop: ['MEGALOOP!', YELLOW] };
 const fmt = (n) => n.toLocaleString('en-US');
 
 // Callout for a run event (src/game/run.js).
@@ -13,7 +14,7 @@ function eventCallout(e) {
   if (e.type === 'ring') return [`Ring! +${fmt(e.points)}`, YELLOW];
   if (e.type === 'crash') return ['Wipeout! Combo lost', RED];
   if (e.type === 'hit') return ['Hit! Combo lost', RED];
-  const parts = [`${e.height.toFixed(1)} m`, e.grab && 'grab', e.spins && `${e.spins * 360}`, e.mult > 1 && `×${e.mult}`];
+  const parts = [`${e.height.toFixed(1)} m`, e.grab && 'grab', e.spins && `${e.spins * 360}`, e.loop, e.mult > 1 && `×${e.mult}`];
   return [`+${fmt(e.points)}  ${parts.filter(Boolean).join(' · ')}`, GREEN];
 }
 
@@ -56,23 +57,34 @@ export function createHud() {
   };
 
   return {
-    update(state, run) {
+    update(state, run, t) {
       speed.textContent = (Math.hypot(state.vel.x, state.vel.z) * 3.6).toFixed(0);
-      wind.textContent = (WIND.knots * WIND.strength * state.gust).toFixed(0);
+      const kn = (WIND.knots * WIND.strength * state.gust).toFixed(0);
+      const next = upcomingGusts(t, 1)[0]; // warn of a gust (not a lull) arriving within 2 s
+      const soon = next && next.amp > 0 && next.at - t < 2 && next.at > t;
+      wind.textContent = soon ? `${kn} · GUST!` : kn;
       const pct = Math.min(100, state.kite.power * 100).toFixed(0);
       power.style.width = `${pct}%`;
       powerPct.textContent = pct;
       const c = state.charge;
-      charge.style.width = `${(c * 100).toFixed(0)}%`;
-      charge.style.background = c > JUMP.sweetMax ? RED : c >= JUMP.sweetMin ? GREEN : YELLOW;
+      const loop = state.loop;
+      if (loop) {
+        // In a kiteloop the jump bar shows the loop coming round: keep holding until it's full.
+        charge.style.width = `${Math.min(100, (loop.turned / (2 * Math.PI)) * 100).toFixed(0)}%`;
+        charge.style.background = loop.stalled ? RED : loop.done ? GREEN : YELLOW;
+      } else {
+        charge.style.width = `${(c * 100).toFixed(0)}%`;
+        charge.style.background = c > JUMP.sweetMax ? RED : c >= JUMP.sweetMin ? GREEN : YELLOW;
+      }
       air.textContent = state.airborne ? `${Math.max(0, state.pos.y - state.takeoffY).toFixed(1)} m` : '–';
       best.textContent = `${state.bestJump.toFixed(1)} m`;
       crash.style.display = state.kite.crashed ? 'block' : 'none';
 
       const now = performance.now();
       for (const e of run.events.splice(0)) callout(...eventCallout(e), now);
-      if (state.trick !== shownTrick) {
-        shownTrick = state.trick;
+      const trick = state.loop && !state.loop.stalled ? (state.loop.mega ? 'megaloop' : 'loop') : state.trick;
+      if (trick !== shownTrick) {
+        shownTrick = trick;
         if (shownTrick) callout(...TRICK[shownTrick], now);
       }
       if (state.jumpResult) callout(...RELEASE[state.jumpResult], now);

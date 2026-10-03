@@ -34,5 +34,7 @@ function kiteSteer(s, jump) {
 }
 
 export function autopilot(s, jump) {
+  // A kiteloop in progress: full lock, held until the kite has turned a full circle.
+  if (s.loop && !s.loop.done && !s.loop.stalled) return { kiteSteer: s.loop.dir, jump };
   return { kiteSteer: kiteSteer(s, jump), jump };
 }

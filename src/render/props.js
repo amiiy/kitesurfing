@@ -34,10 +34,14 @@ export async function loadProp(name, height) {
 }
 
 // One InstancedMesh per part, placed by `matrices`, added to `group` once loaded. No shadows.
+// Resolves to the meshes.
 export async function instanceProp(group, name, height, matrices) {
+  const meshes = [];
   for (const { geometry, material } of await loadProp(name, height)) {
     const mesh = new THREE.InstancedMesh(geometry, material, matrices.length);
     matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
     group.add(mesh);
+    meshes.push(mesh);
   }
+  return meshes;
 }

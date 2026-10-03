@@ -3,6 +3,9 @@ import { createInput } from './input.js';
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
 import { timeScale } from './feel.js';
+import { setWind } from './waves.js';
+import { setWindPlan } from './sim/wind.js';
+import { LEVELS } from './game/levels.js';
 import { createState, kiteDirection, orientBoard } from './sim/physics.js';
 import { createRun, stepRun } from './game/run.js';
 import { createScreens } from './game/screens.js';
@@ -11,11 +14,15 @@ import { createWorld } from './render/world.js';
 import { createWater } from './render/water.js';
 import { createBoardEffects } from './render/effects.js';
 import { createBuoys } from './render/buoys.js';
+import { createLife } from './render/life.js';
 import { createCourseView } from './render/course.js';
+import { createMarkers } from './render/markers.js';
 import { createRiderModel } from './render/riderModel.js';
 import { createKiteModel, createKiteLines } from './render/kiteModel.js';
 import { createFollowCamera } from './render/followCamera.js';
 import { outline, toonify } from './render/toon.js';
+import { applyTimeOfDay } from './render/timeOfDay.js';
+import { GAME } from './config.js';
 
 // Physics steps at a fixed rate so it plays the same on 30, 60 and 144 Hz displays;
 // frames in between draw a blend of the last two steps so motion stays smooth.
@@ -31,7 +38,9 @@ function start() {
   const water = createWater({ sunDir: world.sun });
   const effects = createBoardEffects(world.renderer);
   const buoys = createBuoys();
+  const life = createLife(world.renderer);
   const course = createCourseView();
+  const markers = createMarkers();
   const rider = createRiderModel();
   const kite = createKiteModel();
   const lines = createKiteLines();
@@ -41,7 +50,8 @@ function start() {
   const screens = createScreens();
   screens.ready(); // loaded: the title (the load screen until now) offers "tap to start"
 
-  world.scene.add(water.mesh, buoys.group, course.group, kite.group, lines.group, ...rider.objects, ...effects.objects);
+  world.scene.add(water.mesh, buoys.group, course.group, markers.group, kite.group, lines.group, ...rider.objects, ...effects.objects);
+  world.scene.add(life.group);
   toonify(world.scene);
   for (const hero of [...rider.objects, kite.group]) outline(hero);
   world.onResize(effects.updatePixelScale);
@@ -76,7 +86,22 @@ function start() {
     followCamera.reset();
     screens.hide();
   }
+  let storm = false; // the picked level's weather
   const input = createInput({ onReset: startRun });
+  // Title: pick a level (sets the sea and the wind plan), then go. Retries keep it.
+  const pick = document.getElementById('level-pick');
+  for (const level of LEVELS) {
+    const b = document.createElement('button');
+    b.innerHTML = `${level.name}<small>${level.blurb}</small>`;
+    b.addEventListener('click', () => {
+      setWind(level.swell, level.size);
+      setWindPlan(level);
+      storm = level.weather === 'storm';
+      water.rebuild();
+      startRun();
+    });
+    pick.append(b);
+  }
 
   // What renderers see: same shape as `state`, motion interpolated, derived vectors rebuilt.
   const own = { pos: new THREE.Vector3(), forward: new THREE.Vector3(), side: new THREE.Vector3(), kiteDir: new THREE.Vector3(), kite: {} };
@@ -106,15 +131,19 @@ function start() {
   function render(t, dt, realDt) {
     kite.update(view, dt);
     rider.update(view, kite.group.position, t, dt);
-    for (const i of [0, 1]) lines.set(i, rider.barEnd(i, lineStart), kite.tip(i, lineEnd));
+    for (const i of [0, 1]) lines.set(i, rider.barEnd(i, lineStart), kite.tip(i, lineEnd), view.kite.power);
     buoys.update(t, view.pos);
+    life.update(t, dt, view.pos);
     course.update(run, t);
+    markers.update(run, view, t);
     water.update(t, view);
+    water.setCalm(world.updateShore(view.pos, 1 - run.time / GAME.runTime));
     followCamera.update(rider.position, kite.group.position, view, realDt);
     world.followSun(rider.position);
-    hud.update(view, run);
+    applyTimeOfDay(world, water, 1 - run.time / GAME.runTime, storm, t); // after the camera: rain wraps around it
+    hud.update(view, run, t);
     audio.update(view, dt);
-    world.render();
+    world.render(realDt);
   }
 
   const clock = new THREE.Clock();
@@ -129,7 +158,7 @@ function start() {
       const { jump } = input.read(); // may restart the run (R / Start), so read before using `state`
       // Off a run (title, results) a fresh press starts one; the results ignore it for a moment so a
       // tap meant for the last jump can't skip them.
-      if (run.phase !== 'playing' && jump && !wasPressed && performance.now() - resultsAt > SCREEN_LOCK_MS) startRun();
+      if (run.phase === 'results' && jump && !wasPressed && performance.now() - resultsAt > SCREEN_LOCK_MS) startRun();
       wasPressed = jump;
       snapshot();
       simTime += STEP;
