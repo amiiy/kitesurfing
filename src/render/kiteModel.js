@@ -86,6 +86,7 @@ export function createKiteModel() {
       group.position.copy(state.pos).addScaledVector(state.kiteDir, KITE.lineLength);
       group.position.y += ANCHOR_HEIGHT;
       if (state.kite.crashed) group.position.y = state.pos.y + 0.4; // lying on the water
+      group.scale.setScalar(Math.sqrt(KITE.size / 10)); // span ∝ √area
 
       // Tangents of the window sphere: up = d/d(el), right = d/d(az).
       up.set(-Math.sin(az) * Math.sin(el), Math.cos(el), Math.cos(az) * Math.sin(el));

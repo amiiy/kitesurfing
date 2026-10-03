@@ -28,6 +28,10 @@ Ride a beam reach, load the kite, pop off the swell and land tricks. The physics
 | Gusty | Jump in the gusts; watch for dark water |
 | Building | 22 → 32 kn, gusty, big side-on swell, storm |
 
+## Kite size
+
+Pick 8, 10 or 15 m² on the title screen before choosing a level; retries keep it. Line pull scales with area, and span (so turn radius) with √area. In the same wind, the 8 m is calmer (~36 km/h, ~9 m jumps), the 10 m is the baseline (~42 km/h, ~11 m), and the 15 m is overpowered (~55 km/h, ~20 m jumps with long hang time).
+
 ## Getting started
 
 ```sh

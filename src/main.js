@@ -22,7 +22,7 @@ import { createKiteModel, createKiteLines } from './render/kiteModel.js';
 import { createFollowCamera } from './render/followCamera.js';
 import { outline, toonify } from './render/toon.js';
 import { applyTimeOfDay } from './render/timeOfDay.js';
-import { GAME } from './config.js';
+import { GAME, KITE } from './config.js';
 
 // Physics steps at a fixed rate so it plays the same on 30, 60 and 144 Hz displays;
 // frames in between draw a blend of the last two steps so motion stays smooth.
@@ -101,6 +101,14 @@ function start() {
       startRun();
     });
     pick.append(b);
+  }
+  // Kite size (m²): sets KITE.size, which the sim and the kite model read. Pick before the level; retries keep it.
+  const sizes = document.querySelectorAll('#size-pick button');
+  for (const b of sizes) {
+    b.addEventListener('click', () => {
+      KITE.size = Number(b.dataset.size);
+      for (const o of sizes) o.setAttribute('aria-pressed', String(o === b));
+    });
   }
 
   // What renderers see: same shape as `state`, motion interpolated, derived vectors rebuilt.

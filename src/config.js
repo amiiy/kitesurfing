@@ -16,17 +16,24 @@ export const SEA = {
 
 export const KITE = {
   lineLength: 15, // m
+  size: 10, // m², picked on the title screen (8 / 10 / 15). Pull ∝ area; span, so turn radius, ∝ √area.
   // A high-power big-air kite (Core Nexus style): pulls hard parked at the window edge.
   edge: 1.35, // rad from the window centre (straight downwind) to its edge, ≈ atan(liftDrag): the kite parks there
   startClock: 0.15, // rad clock angle a run starts the kite at: near 12 o'clock, little pull (waterstart)
   park: Math.PI / 3, // rad clock angle on the edge the kite is parked at: 60° from 12 o'clock = 10/2 o'clock
-  turnRadius: 4, // m; tightest turn, at full steering: turn rate = airspeed / turnRadius
+  // m; tightest turn, at full steering: turn rate = airspeed / turnRadius. 4 m on a 10 m² kite.
+  get turnRadius() {
+    return 4 * Math.sqrt(this.size / 10);
+  },
   rollResponse: 14, // 1/s; how fast the turn rate follows the steering as the kite rolls into a turn
   liftDrag: 4.5, // L/D: crosswind the kite flies at this times the wind blowing along its lines; edge = atan(L/D)
   diveBoost: 0.3, // target speed is this much higher flying straight down, lower flying straight up
   speedResponse: 3, // 1/s; how fast the kite's speed follows its target
   edgeReturn: 3, // 1/s; a kite carried past the edge luffs and eases back at this rate
-  tension: 7, // m/s² of line pull at power 1: parked on the edge in the base wind, rider still
+  // m/s² of line pull at power 1: parked on the edge in the base wind, rider still. 7 on a 10 m² kite.
+  get tension() {
+    return (7 * this.size) / 10;
+  },
   maxPower: 2, // power the rider sheets out at: a dive or loop pulls up to this
   powerResponse: 2.9, // 1/s; power eases toward its target (line tension), ~0.35 s time constant
   minElevation: 0.1, // rad; just above the water

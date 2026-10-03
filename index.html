@@ -41,6 +41,10 @@
       #level-pick button { display: flex; flex-direction: column; gap: 2px; padding: 10px 22px; border: 0; border-radius: 22px; font: 700 18px system-ui, sans-serif; color: #1d1d28; background: #ffd21f; cursor: pointer; }
       #level-pick small { font-size: 12px; font-weight: 400; }
       #title:not(.ready) #level-pick { visibility: hidden; }
+      #size-pick { display: flex; gap: 8px; align-items: center; }
+      #size-pick button { padding: 6px 16px; border: 2px solid #ffd21f; border-radius: 16px; font: 700 15px system-ui, sans-serif; color: #ffd21f; background: #0006; cursor: pointer; }
+      #size-pick button[aria-pressed="true"] { color: #1d1d28; background: #ffd21f; }
+      #title:not(.ready) #size-pick { visibility: hidden; }
       #loading { display: flex; flex-direction: column; align-items: center; gap: 10px; }
       #loading > div { width: 200px; height: 4px; background: #fff3; }
       #loading > div > div { width: 0; height: 100%; background: #4cf; transition: width .2s; }
@@ -50,6 +54,7 @@
     <div id="title" class="screen">
       <h1>Kite Runner</h1>
       <div id="loading">Loading…<div><div></div></div></div>
+      <div id="size-pick">Kite<button data-size="8">8 m</button><button data-size="10" aria-pressed="true">10 m</button><button data-size="15">15 m</button></div>
       <div class="tap">Pick a level</div>
       <div id="level-pick"></div>
       <div class="how">Hold to load the jump, release in the green for a <b>Perfect</b>. Chain Perfects for ×2, ×3…<br />In the air: tap to grab, double-tap to 360, hold to kiteloop (pull just before the top, hold till it comes round), and land it straight.<br />Pop off the rising face of a wave to go higher, fly through rings, clear the buoys and boats. 75 seconds!</div>
